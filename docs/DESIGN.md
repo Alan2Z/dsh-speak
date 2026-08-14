@@ -119,7 +119,8 @@ Registration snippet (also automated by `install.ps1`):
 # ~/.dsh/profiles/web/cordis.patch.yml
 - insert:
     - id: speech-hook
-      name: 'file:///C:/Users/<you>/.dsh/profiles/web/plugins/speech-hook.js'
+      # replace <your-username> with your Windows username
+      name: 'file:///C:/Users/<your-username>/.dsh/profiles/web/plugins/speech-hook.js'
 ```
 
 > Node's ESM loader does not accept Windows absolute paths as plugin names — the

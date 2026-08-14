@@ -111,7 +111,8 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
 # ~/.dsh/profiles/web/cordis.patch.yml
 - insert:
     - id: speech-hook
-      name: 'file:///C:/Users/<you>/.dsh/profiles/web/plugins/speech-hook.js'
+      # 把 <your-username> 换成你的 Windows 用户名
+      name: 'file:///C:/Users/<your-username>/.dsh/profiles/web/plugins/speech-hook.js'
 ```
 
 > Node 的 ESM 加载器不接受 Windows 绝对路径作为插件名——必须用

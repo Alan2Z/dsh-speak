@@ -16,7 +16,7 @@
 //   - insert:
 //       - id: speech-hook
 //         name: 'dsh-speak'                       # npm package (preferred)
-//         name: 'file:///C:/Users/<you>/.../speech-hook.js'   # repo/file install
+//         name: 'file:///C:/Users/<your-username>/.../speech-hook.js'   # repo/file install (replace <your-username>)
 // (run adapters/dsh/install.ps1 to do this automatically for the file install)
 //
 // Configuration (environment variables, optional):
