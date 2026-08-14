@@ -223,10 +223,15 @@ dsh-speak` alone is sufficient — no separate copying step.
 ### Publish steps (maintainer)
 
 ```powershell
-npm login                 # npmjs.com account with 2FA (required by npm)
-npm publish               # publishes package.json + `files` whitelist
+npm login --registry=https://registry.npmjs.org   # official registry, 2FA required
+npm publish                                       # publishConfig.registry pins the official registry
 # bump "version" in package.json before every subsequent publish
 ```
+
+> China note: if your global `.npmrc` points at a mirror (`registry.npmmirror.com`
+> etc.), `npm login`/`npm publish` would target the mirror, which does **not**
+> accept publishes. The package's `publishConfig.registry` pins publishing to the
+> official registry; just make sure the login used the official registry too.
 
 ### Install steps (DSH user)
 

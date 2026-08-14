@@ -211,10 +211,14 @@ DSH 的插件机制基于 Cordis，官方安装树外插件的路径是
 ### 发布步骤（维护者）
 
 ```powershell
-npm login                 # npmjs.com 账号（npm 强制要求 2FA）
-npm publish               # 发布 package.json + files 白名单内容
+npm login --registry=https://registry.npmjs.org   # 官方源，npm 强制要求 2FA
+npm publish                                       # publishConfig.registry 已锁定官方源
 # 后续每次发布前先在 package.json 里 bump "version"
 ```
+
+> 中国区注意：如果你的全局 `.npmrc` 指向镜像（如 `registry.npmmirror.com`），
+> `npm login`/`npm publish` 会打到镜像站——镜像**不接受发布**。本包的
+> `publishConfig.registry` 已把发布锁定到官方源；登录时也要用官方源。
 
 ### 安装步骤（DSH 用户）
 

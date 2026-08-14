@@ -36,5 +36,8 @@
     "url": "https://github.com/Alan2Z/dsh-speak.git"
   },
   "author": "Alan2Z",
-  "license": "MIT"
+  "license": "MIT",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org"
+  }
 }
