@@ -11,6 +11,30 @@ dsh-speak 通过 Windows 语音合成把 Agent 的最终回复朗读出来，优
 > **项目定位**：本项目只是为了给想让 harness 开口说话的用户提供一种**已经验证过的方案**；
 > 没有意外的话，后续不会再更新。
 
+## 三分钟安装 — DSH
+
+1. 把包装进你的 web profile（二选一）：
+
+   ```powershell
+   dsh plugin --profile web add dsh-speak
+   # 或（没有 pnpm 时）：
+   npm install --prefix "$env:USERPROFILE\.dsh\profiles\web" dsh-speak
+   ```
+
+2. 在 `~/.dsh/profiles/web/cordis.patch.yml` 末尾追加：
+
+   ```yaml
+   - insert:
+       - id: speech-hook
+         name: 'dsh-speak'
+   ```
+
+3. 重启 DSH web 应用——之后回复就会被朗读出来。
+
+> **想让 Agent 帮你装？** 把本仓库地址（`https://github.com/Alan2Z/dsh-speak`）
+> 丢给你的 DSH 会话，让它照着这份 README 安装即可——它读的就是你正在看的这份文档。
+> 只需要同意它对 `~/.dsh`（工作区外）的写入审批。
+
 ```
 harness 事件（DSH 会话事件 / Claude Code Stop hook / 任意方式）
       │

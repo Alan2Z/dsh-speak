@@ -14,6 +14,31 @@ and is structured so any harness can plug in.
 > solution** for users who want their harness to speak. Barring unexpected
 > circumstances, it will not be updated further.
 
+## TL;DR — install for DSH
+
+1. Install the package into your web profile (pick one):
+
+   ```powershell
+   dsh plugin --profile web add dsh-speak
+   # or, without pnpm:
+   npm install --prefix "$env:USERPROFILE\.dsh\profiles\web" dsh-speak
+   ```
+
+2. Append to `~/.dsh/profiles/web/cordis.patch.yml`:
+
+   ```yaml
+   - insert:
+       - id: speech-hook
+         name: 'dsh-speak'
+   ```
+
+3. Restart the DSH web app — replies are now announced aloud.
+
+> **Let your agent do it?** Paste this repo URL
+> (`https://github.com/Alan2Z/dsh-speak`) into your DSH session and ask it to
+> install the plugin — your agent follows this very README. Approving the
+> out-of-workspace writes (`~/.dsh`) is all that's needed.
+
 ```
 harness event (DSH session event / Claude Code Stop hook / anything)
       │
