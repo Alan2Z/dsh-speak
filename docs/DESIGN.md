@@ -193,3 +193,48 @@ to give a harness a voice: a small engine + the two adapter patterns (event-stre
 and stop-hook) that worked. If you need more (voice management UI, more backends,
 cross-platform), treat the engine as the seam and build on top — this repository
 stays as a minimal, self-contained reference implementation.
+
+## 9. Publishing as an npm plugin (appendix)
+
+The DSH plugin mechanism is Cordis-based, and the official install path for
+out-of-tree plugins is `dsh plugin --profile web add <package>` (pnpm-managed
+dependencies in the profile). This repository is prepared for that path:
+
+### Package layout
+
+- `package.json` — `name: dsh-speak`, `main: adapters/dsh/speech-hook.js`,
+  `files` whitelists exactly what ships (plugin, `engine/*.ps1`, `install.ps1`,
+  docs, license). `prepublishOnly` runs `node --check` on the plugin.
+- The plugin entry is the same CJS module (`module.exports = { apply(ctx) }`)
+  already used by the file install — no code change is needed to publish.
+
+### Engine resolution (npm vs file install)
+
+`speech-hook.js` locates `engine/speak.ps1` in this order:
+
+1. `DSH_SPEAK_ENGINE` environment override;
+2. `<package>/engine/speak.ps1` resolved relative to the plugin file — covers
+   both a repo checkout and `node_modules/dsh-speak/` after `npm install`;
+3. legacy `%USERPROFILE%\.dsh\hooks\speak.ps1` (the file-install location).
+
+Because the engine rides inside the npm package, `dsh plugin --profile web add
+dsh-speak` alone is sufficient — no separate copying step.
+
+### Publish steps (maintainer)
+
+```powershell
+npm login                 # npmjs.com account with 2FA (required by npm)
+npm publish               # publishes package.json + `files` whitelist
+# bump "version" in package.json before every subsequent publish
+```
+
+### Install steps (DSH user)
+
+```powershell
+dsh plugin --profile web add dsh-speak
+# then register in ~/.dsh/profiles/web/cordis.patch.yml:
+#   - insert:
+#       - id: speech-hook
+#         name: 'dsh-speak'
+# restart the DSH web app
+```

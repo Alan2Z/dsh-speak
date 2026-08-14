@@ -181,3 +181,48 @@ hook）、任意 shell harness（Agent 自己调 `speech-summary.ps1`）就是�
 开口说话的实现路径：一个小引擎 + 两种可复用的适配范式（事件流 / Stop hook）。
 如果你需要更多（音色管理界面、更多后端、跨平台），把引擎当作接缝在其上扩展——
 本仓库保持为最小、自包含的参考实现。
+
+## 9. 发布为 npm 插件（附录）
+
+DSH 的插件机制基于 Cordis，官方安装树外插件的路径是
+`dsh plugin --profile web add <包名>`（由 pnpm 管理 profile 依赖）。本仓库已为
+该路径做好准备：
+
+### 包结构
+
+- `package.json` — `name: dsh-speak`，`main: adapters/dsh/speech-hook.js`，
+  `files` 白名单精确列出发布内容（插件、`engine/*.ps1`、`install.ps1`、文档、
+  LICENSE）。`prepublishOnly` 会对插件跑 `node --check`。
+- 插件入口就是文件安装已用的同一个 CJS 模块（`module.exports = { apply(ctx) }`）
+  ——发布**不需要改任何代码**。
+
+### 引擎解析（npm 安装 vs 文件安装）
+
+`speech-hook.js` 按以下顺序定位 `engine/speak.ps1`：
+
+1. `DSH_SPEAK_ENGINE` 环境变量覆盖；
+2. 相对插件文件解析 `<包>/engine/speak.ps1`——同时覆盖仓库检出和
+   `npm install` 后的 `node_modules/dsh-speak/`；
+3. 旧的 `%USERPROFILE%\.dsh\hooks\speak.ps1`（文件安装的位置）。
+
+因为引擎随 npm 包分发，用户只需 `dsh plugin --profile web add dsh-speak`
+一条命令，无需额外拷贝。
+
+### 发布步骤（维护者）
+
+```powershell
+npm login                 # npmjs.com 账号（npm 强制要求 2FA）
+npm publish               # 发布 package.json + files 白名单内容
+# 后续每次发布前先在 package.json 里 bump "version"
+```
+
+### 安装步骤（DSH 用户）
+
+```powershell
+dsh plugin --profile web add dsh-speak
+# 然后在 ~/.dsh/profiles/web/cordis.patch.yml 注册：
+#   - insert:
+#       - id: speech-hook
+#         name: 'dsh-speak'
+# 重启 DSH web 应用
+```

@@ -50,9 +50,30 @@ harness event (DSH session event / Claude Code Stop hook / anything)
 
 ## Quick start — DSH
 
+### Option A — npm plugin (recommended)
+
+```powershell
+# 1. install the plugin into your web profile (adds dsh-speak to
+#    ~/.dsh/profiles/web/package.json dependencies)
+dsh plugin --profile web add dsh-speak
+
+# 2. register it in ~/.dsh/profiles/web/cordis.patch.yml
+#    (for npm packages the bare package name is used — no file:/// URL needed):
+#    - insert:
+#        - id: speech-hook
+#          name: 'dsh-speak'
+
+# 3. restart the DSH web app — replies are now announced automatically
+```
+
+The engine ships inside the package (`node_modules/dsh-speak/engine/`), so no extra
+copying is needed.
+
+### Option B — file install (no npm needed)
+
 ```powershell
 # 1. clone
-git clone https://github.com/<you>/dsh-speak.git
+git clone https://github.com/Alan2Z/dsh-speak.git
 cd dsh-speak
 
 # 2. one-command install: copies engine + plugin, registers in cordis.patch.yml
@@ -64,7 +85,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.dsh\hooks
 # 4. restart the DSH web app — replies are now announced automatically
 ```
 
-What the installer did:
+What the file installer did:
 
 | file | destination |
 | ---- | ----------- |

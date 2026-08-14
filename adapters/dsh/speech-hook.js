@@ -15,12 +15,14 @@
 // Registration: add an insert entry in ~/.dsh/profiles/web/cordis.patch.yml —
 //   - insert:
 //       - id: speech-hook
-//         name: 'file:///C:/Users/<you>/.dsh/profiles/web/plugins/speech-hook.js'
-// (run adapters/dsh/install.ps1 to do this automatically)
+//         name: 'dsh-speak'                       # npm package (preferred)
+//         name: 'file:///C:/Users/<you>/.../speech-hook.js'   # repo/file install
+// (run adapters/dsh/install.ps1 to do this automatically for the file install)
 //
 // Configuration (environment variables, optional):
 //   DSH_SPEAK_ENGINE      path to engine/speak.ps1
-//                         (default: %USERPROFILE%\.dsh\hooks\speak.ps1)
+//                         (default: <package>/engine/speak.ps1, then
+//                          %USERPROFILE%\.dsh\hooks\speak.ps1)
 //   DSH_SPEAK_THROTTLE_MS throttle delay before announcing (default: 1500)
 'use strict'
 const { spawn } = require('child_process')
@@ -37,9 +39,21 @@ function log(...args) {
 }
 
 const THROTTLE_MS = Number(process.env.DSH_SPEAK_THROTTLE_MS) || 1500
-const SPEAK_ENGINE =
-  process.env.DSH_SPEAK_ENGINE ||
-  path.join(process.env.USERPROFILE, '.dsh', 'hooks', 'speak.ps1')
+
+/**
+ * Locate engine/speak.ps1:
+ *   1. explicit DSH_SPEAK_ENGINE override
+ *   2. <this package>/engine/speak.ps1 — works both when running from a repo
+ *      checkout and when installed into a profile's node_modules (npm install)
+ *   3. legacy file-copy location (~/.dsh/hooks/speak.ps1) from install.ps1
+ */
+function resolveEngine() {
+  if (process.env.DSH_SPEAK_ENGINE) return process.env.DSH_SPEAK_ENGINE
+  const bundled = path.join(__dirname, '..', '..', 'engine', 'speak.ps1')
+  if (fs.existsSync(bundled)) return bundled
+  return path.join(process.env.USERPROFILE, '.dsh', 'hooks', 'speak.ps1')
+}
+const SPEAK_ENGINE = resolveEngine()
 
 module.exports = {
   apply(ctx) {

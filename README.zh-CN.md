@@ -44,9 +44,27 @@ harness 事件（DSH 会话事件 / Claude Code Stop hook / 任意方式）
 
 ## 快速开始 — DSH
 
+### 方式 A — npm 插件（推荐）
+
+```powershell
+# 1. 把插件装进你的 web profile（会写入 ~/.dsh/profiles/web/package.json 的 dependencies）
+dsh plugin --profile web add dsh-speak
+
+# 2. 在 ~/.dsh/profiles/web/cordis.patch.yml 里注册（npm 包直接用包名，无需 file:/// URL）：
+#    - insert:
+#        - id: speech-hook
+#          name: 'dsh-speak'
+
+# 3. 重启 DSH web 应用 — 之后回复会被自动播报
+```
+
+引擎随包分发（`node_modules/dsh-speak/engine/`），无需额外拷贝。
+
+### 方式 B — 文件安装（不需要 npm）
+
 ```powershell
 # 1. 克隆
-git clone https://github.com/<you>/dsh-speak.git
+git clone https://github.com/Alan2Z/dsh-speak.git
 cd dsh-speak
 
 # 2. 一键安装：拷贝引擎 + 插件，并注册到 cordis.patch.yml
@@ -58,7 +76,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.dsh\hooks
 # 4. 重启 DSH web 应用 — 之后回复会被自动播报
 ```
 
-安装脚本做了这些事：
+文件安装脚本做了这些事：
 
 | 文件 | 目标位置 |
 | ---- | -------- |

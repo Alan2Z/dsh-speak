@@ -1,0 +1,40 @@
+{
+  "name": "dsh-speak",
+  "version": "1.0.0",
+  "description": "Make your AI harness speak — verified voice announcements for DSH and other AI coding harnesses (Windows SAPI5 + natural voices)",
+  "main": "adapters/dsh/speech-hook.js",
+  "files": [
+    "adapters/dsh/speech-hook.js",
+    "adapters/dsh/install.ps1",
+    "engine/",
+    "docs/",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "tts",
+    "text-to-speech",
+    "voice",
+    "speech",
+    "voice-announcement",
+    "sapi5",
+    "windows",
+    "powershell"
+  ],
+  "scripts": {
+    "prepublishOnly": "node --check adapters/dsh/speech-hook.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Alan2Z/dsh-speak.git"
+  },
+  "author": "Alan2Z",
+  "license": "MIT"
+}
