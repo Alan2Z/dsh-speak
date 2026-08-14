@@ -33,7 +33,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Alan2Z/dsh-speak.git"
+    "url": "git+https://github.com/Alan2Z/dsh-speak.git"
   },
   "author": "Alan2Z",
   "license": "MIT",
