@@ -231,3 +231,9 @@ dsh plugin --profile web add dsh-speak
 #         name: 'dsh-speak'
 # 重启 DSH web 应用
 ```
+
+> 没装 pnpm？`dsh plugin` 内部转发给 pnpm；等价命令是
+> `npm install --prefix "$env:USERPROFILE\.dsh\profiles\web" dsh-speak`
+> （效果相同：包进入 profile 的 dependencies 与 node_modules）。
+> 改 `cordis.patch.yml` 时 patch 监视器会热更新插件树——已验证：插件以 npm 包内
+> 引擎路径重新 apply，注册切换本身无需重启。

@@ -66,6 +66,13 @@ dsh plugin --profile web add dsh-speak
 # 3. restart the DSH web app — replies are now announced automatically
 ```
 
+> **No pnpm?** `dsh plugin` forwards to pnpm, which is not installed on every
+> machine. The exact same install can be done with npm directly:
+>
+> ```powershell
+> npm install --prefix "$env:USERPROFILE\.dsh\profiles\web" dsh-speak
+> ```
+
 The engine ships inside the package (`node_modules/dsh-speak/engine/`), so no extra
 copying is needed.
 

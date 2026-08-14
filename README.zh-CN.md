@@ -58,6 +58,13 @@ dsh plugin --profile web add dsh-speak
 # 3. 重启 DSH web 应用 — 之后回复会被自动播报
 ```
 
+> **没有 pnpm？** `dsh plugin` 内部转发给 pnpm，并非所有机器都装了。可以用 npm
+> 直接完成同样的安装：
+>
+> ```powershell
+> npm install --prefix "$env:USERPROFILE\.dsh\profiles\web" dsh-speak
+> ```
+
 引擎随包分发（`node_modules/dsh-speak/engine/`），无需额外拷贝。
 
 ### 方式 B — 文件安装（不需要 npm）

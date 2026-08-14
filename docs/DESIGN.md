@@ -244,3 +244,10 @@ dsh plugin --profile web add dsh-speak
 #         name: 'dsh-speak'
 # restart the DSH web app
 ```
+
+> No pnpm installed? `dsh plugin` forwards to pnpm; the npm equivalent is
+> `npm install --prefix "$env:USERPROFILE\.dsh\profiles\web" dsh-speak`
+> (same result: package lands in the profile's `dependencies` + `node_modules`).
+> The patch watcher hot-reloads the plugin tree on `cordis.patch.yml` changes —
+> verified: the plugin re-applies with the npm-bundled engine path, no restart
+> needed for the registration switch itself.
