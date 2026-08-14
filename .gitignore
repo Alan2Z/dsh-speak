@@ -1,0 +1,14 @@
+# node
+node_modules/
+
+# logs & temp
+*.log
+*.tmp
+.tmp*
+
+# OS
+Thumbs.db
+.DS_Store
+
+# local install artifacts (never commit a user's real paths)
+.backup/
