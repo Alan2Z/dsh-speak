@@ -6,10 +6,11 @@
 
 Let your agent **tell you** when a long task is done — no more staring at the screen.
 
-dsh-speak reads the final assistant reply aloud through Windows speech synthesis,
-using natural voices (Windows 11 built-in, or [NaturalVoiceSAPIAdapter] on
-Windows 10) with graceful fallback to stock voices. It was built for
-[DeepSeek Harness](https://github.com/deepseek-ai/dsh)
+dsh-speak reads the final assistant reply aloud through system speech synthesis —
+on Windows using natural voices (Windows 11 built-in, or
+[NaturalVoiceSAPIAdapter] on Windows 10) with graceful fallback to stock voices;
+on macOS using the built-in `say` (can follow a Siri natural voice). It was built
+for [DeepSeek Harness](https://github.com/deepseek-ai/dsh)
 and is structured so any harness can plug in.
 
 > **Project status**: this project exists only to provide an **already-verified
@@ -24,6 +25,12 @@ and is structured so any harness can plug in.
    dsh plugin --profile web add dsh-speak
    # or, without pnpm:
    npm install --prefix "$env:USERPROFILE\.dsh\profiles\web" dsh-speak
+   ```
+
+   On macOS (bash):
+
+   ```bash
+   npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
    ```
 
 2. Append to `~/.dsh/profiles/web/cordis.patch.yml`:
@@ -45,7 +52,7 @@ and is structured so any harness can plug in.
 harness event (DSH session event / Claude Code Stop hook / anything)
       │
       ▼  adapters/…  (harness-specific trigger: filter, throttle, cancel)
-      ▼  engine/speak.ps1  (harness-agnostic: clean text → Windows SAPI5)
+      ▼  engine/speak.ps1 / speak.sh  (harness-agnostic: clean text → SAPI5 / say)
       ▼  🔊 you hear the final reply
 ```
 
@@ -54,15 +61,18 @@ harness event (DSH session event / Claude Code Stop hook / anything)
 - **Automatic**: DSH web plugin watches the session event stream and announces the
   final reply (skips reasoning/tool-call narration, merges multi-step messages).
 - **Best-effort**: never throws, never blocks the harness, never breaks a session.
-- **Natural voices**: prefers natural voices — Windows 11 built-in packs, or
-  voices registered via NaturalVoiceSAPIAdapter on Windows 10 (e.g. Xiaoxiao) —
-  and falls back to any installed voice.
-- **Robust text cleaning**: strips markdown/URLs/emoji that make SAPI `Speak()`
-  silently fail, and guards the adapter's per-utterance character ceiling.
+- **Natural voices**: Windows prefers natural voices — Windows 11 built-in packs,
+  or voices registered via NaturalVoiceSAPIAdapter on Windows 10 (e.g. Xiaoxiao);
+  macOS uses the system reading voice (Siri natural voices on recent macOS). Both
+  fall back to any installed voice.
+- **Robust text cleaning**: strips markdown/URLs/emoji that make speech synthesis
+  fail silently, and guards the adapter's per-utterance character ceiling.
 - **Portable engine**: any process can speak with one line:
-  `powershell -File speak.ps1 -Text "你好"`.
+  Windows `powershell -File speak.ps1 -Text "你好"` / macOS `./speak.sh -t "你好"`.
 
 ## Prerequisites
+
+Windows:
 
 - Windows 10 or 11, PowerShell (any recent version).
 - Natural voices:
@@ -74,6 +84,12 @@ harness event (DSH session event / Claude Code Stop hook / anything)
     and use its VoiceDownloader to download the natural voice pack(s) you want
     (Chinese or any other language).
 - Without natural voices, the engine falls back to a stock voice (e.g. Huihui).
+
+macOS:
+
+- macOS (Apple Silicon or Intel), built-in `say` command — **no extra software**.
+- Chinese voices: see the [macOS](#macos) section (incl. the Siri natural-voice
+  picker and its pitfalls).
 
 ## Quick start — DSH
 
@@ -127,24 +143,54 @@ What the file installer did:
 | `adapters/dsh/speech-hook.js` | `%USERPROFILE%\.dsh\profiles\web\plugins\` |
 | registration entry | appended to `%USERPROFILE%\.dsh\profiles\web\cordis.patch.yml` (backed up first) |
 
-## macOS (experimental)
+## macOS
 
-The same adapter runs on macOS — the plugin auto-detects the platform and calls
-`engine/speak.sh` (the built-in `say` command) instead of `speak.ps1`.
+The same adapter runs natively on macOS — the plugin auto-detects the platform and
+calls `engine/speak.sh` (the built-in `say` command) instead of `speak.ps1`.
+**Since 1.2.0 the macOS engine ships in the npm package** — no extra software.
 
-- Voice: by default the engine follows the **system voice** — on recent macOS
-  that is the Siri voice chosen in *Settings → Siri → Voice* ("声音 1-4" are
-  **not** selectable via `say`, they only work as the system default). Use
-  `-v Eddy|Flo|Tingting` to force a specific voice (see `say -v '?'`).
-- `say` has no volume flag — volume follows the system output volume.
-- Install DSH on the Mac, then register the plugin exactly like on Windows
-  (`dsh plugin --profile web add dsh-speak`, or file install). The engine alone
-  can be tested without DSH:
+### Install (npm — same as Windows)
 
 ```bash
-curl -o ~/speak.sh https://raw.githubusercontent.com/Alan2Z/dsh-speak/main/engine/speak.sh
+# 1. install into your web profile (no pnpm needed — only `dsh plugin` requires it)
+npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
+
+# 2. register in ~/.dsh/profiles/web/cordis.patch.yml (bare package name — no file:/// URL):
+#    - insert:
+#        - id: speech-hook
+#          name: 'dsh-speak'
+
+# 3. no restart needed — the patch watcher hot-reloads; pure-text replies are
+#    announced after ~1.5 s (tool-calling replies are intentionally not announced)
+```
+
+> With pnpm installed, `dsh plugin --profile web add dsh-speak` works identically.
+
+### Voices (important — two pitfalls)
+
+- By default the engine follows the **system reading voice** (*Settings →
+  Accessibility → Spoken Content → System Voice*). On **macOS 26** that picker has
+  an **ⓘ circle icon** next to it — click it for the full voice list; the plain
+  dropdown does **not** contain the Siri natural voices. Pick e.g. "普通话 Siri
+  声音1（男声）" there.
+- **Siri voice** (*Settings → Siri → Voice*) and the system reading voice are
+  **two independent settings**; Siri voices are not exposed to `say -v '?'` and
+  cannot be selected by name — they only work as the system default.
+- ⚠️ **Pitfall 1 (reproduced)**: opening the "Spoken Content / Siri Voice" settings
+  pane — **even without changing anything** — drifts/resets the system voice to the
+  classic "婷婷 (Tingting)". If the voice suddenly changes, re-pick it via the ⓘ
+  entry.
+- ⚠️ **Pitfall 2**: the log lives at `$TMPDIR/dsh-speech-hook.log`
+  (`os.tmpdir()` — **not** `/tmp`).
+- Use `-v Eddy|Flo|Tingting` to force a specific voice (`say -v '?'` lists them).
+- `say` has no volume flag — volume follows the system output volume.
+
+### Test the engine alone (no DSH needed)
+
+```bash
+curl -sfL -o ~/speak.sh "https://cdn.jsdelivr.net/gh/Alan2Z/dsh-speak@main/engine/speak.sh"
 chmod +x ~/speak.sh
-~/speak.sh -t "你好，Mac 版语音播报测试"          # auto voice: Eddy / Flo / Tingting
+~/speak.sh -t "你好，Mac 版语音播报测试"
 ~/speak.sh -t "测试" -v Eddy -r 200              # explicit voice + rate
 ```
 
@@ -196,7 +242,7 @@ DSH plugin environment variables:
 
 | var | default | meaning |
 | --- | ------- | ------- |
-| `DSH_SPEAK_ENGINE` | `%USERPROFILE%\.dsh\hooks\speak.ps1` | engine path |
+| `DSH_SPEAK_ENGINE` | empty (auto-resolved) | engine path override; otherwise resolved as `<package>/engine/<platform script>` → `~/.dsh/hooks/<platform script>` (Windows `speak.ps1` / macOS `speak.sh`) |
 | `DSH_SPEAK_THROTTLE_MS` | `1500` | merge delay before announcing |
 
 ## Troubleshooting
@@ -207,14 +253,16 @@ DSH plugin environment variables:
 | Long replies never spoken | adapter per-`Speak` character ceiling | already guarded at 300 chars — lower `-MaxChars` if needed |
 | Emoji-heavy text silent | SAPI fails silently on emoji | already stripped by the engine |
 | Plugin not loading | raw Windows path as plugin name | use the `file:///C:/…` URL form (installer does this) |
+| macOS: voice suddenly became "婷婷" | opening the "Spoken Content / Siri Voice" pane drifted the system voice | re-pick via Settings → Accessibility → Spoken Content → System Voice → ⓘ entry |
+| macOS: no log at `/tmp` | `os.tmpdir()` is `/var/folders/.../T`, not `/tmp` | log is at `$TMPDIR/dsh-speech-hook.log` |
 
-Plugin diagnostics: `%TEMP%\dsh-speech-hook.log`.
+Plugin diagnostics: Windows `%TEMP%\dsh-speech-hook.log`; macOS `$TMPDIR/dsh-speech-hook.log`
 
 ## Repository layout
 
 ```
-engine/                  harness-agnostic speech engine (PowerShell + SAPI5)
-  speak.ps1              clean + speak (the only seam any adapter needs)
+engine/                  harness-agnostic speech engine (PowerShell + SAPI5 / bash + say)
+  speak.ps1 / speak.sh   clean + speak (the only seam any adapter needs)
   speech-prompt.ps1      blocking short announcement
   speech-summary.ps1     blocking reply-summary announcement
 adapters/

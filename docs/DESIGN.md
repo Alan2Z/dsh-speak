@@ -12,14 +12,15 @@ README.
 
 Agentic coding tools run long tasks (builds, tests, migrations, batch edits) while
 you work on something else. When a reply finally lands you have to keep checking
-the screen. **dsh-speak** reads the final reply aloud through Windows speech
-synthesis so you know *without looking* that a long task finished — and what its
-outcome was.
+the screen. **dsh-speak** reads the final reply aloud through system speech
+synthesis (Windows SAPI5 / macOS `say`) so you know *without looking* that a long
+task finished — and what its outcome was.
 
 The original implementation was built and proven in a local DSH (DeepSeek Harness)
 setup. This repository generalizes that working implementation into:
 
-- a **harness-agnostic engine** (PowerShell + Windows SAPI5) that any process can call,
+- a **harness-agnostic engine** (PowerShell + Windows SAPI5 / bash + macOS `say`)
+  that any process can call,
 - **adapter layers** that turn harness-specific events into engine calls
   (DSH session events, Claude Code Stop hooks, ...).
 
@@ -35,8 +36,9 @@ Goals:
 
 Non-goals (for now):
 
-- Windows engine (`speak.ps1`) is primary; a macOS engine (`speak.sh`, built-in
-  `say`) is shipped as **experimental**. Linux/headless TTS is not supported.
+- Both engines — Windows `speak.ps1` and macOS `speak.sh` (built-in `say`) — are
+  **officially supported** (macOS ships in the npm package since 1.2.0).
+  Linux/headless TTS is not supported.
 - In-repo packaging of NaturalVoiceSAPIAdapter (Windows 10 only) or voice data —
   they are prerequisites, not bundled.
 - Streaming/queued playback, per-voice audio files, non-Chinese voice curation.
@@ -61,16 +63,21 @@ Non-goals (for now):
                      | text                           | text
                      v                                v
             +---------------------------------------------------------------+
-            |                   engine/speak.ps1  (harness-agnostic)        |
-            |   text -> clean (markdown/emoji/length) -> SAPI5 Speak()      |
-            +---------------------------------------------------------------+
-                     |
-                     v
-            Windows SAPI5 (System.Speech) — voices:
-              * preferred: a natural voice — Windows 11 built-in pack, or one
-                registered by NaturalVoiceSAPIAdapter on Windows 10
-                (e.g. "Microsoft Xiaoxiao")
-              * fallback:  any zh voice (e.g. "Microsoft Huihui")
+            |              engine/speak.ps1 / speak.sh (harness-agnostic)   |
+            |   text -> clean (markdown/emoji/length) -> system speech      |
+            +--------------------+------------------------------------------+
+                     |                                   |
+                     v                                   v
+            Windows SAPI5 (System.Speech) —   macOS say (system voice):
+              voices:                           * default follows the system
+              * preferred: a natural voice —      voice (may be a Siri voice;
+                 Windows 11 built-in pack, or      not listed by `say -v '?'`,
+                 one registered by                 not selectable by name)
+                 NaturalVoiceSAPIAdapter on      * or -v forces a classic voice
+                 Windows 10 (e.g. "Microsoft      (Eddy / Tingting / Flo ...)
+                 Xiaoxiao")                      * no volume flag (follows
+              * fallback:  any zh voice (e.g.      the system output)
+                 "Microsoft Huihui")
 ```
 
 ### 3.1 Engine — `engine/speak.ps1` (+ `engine/speak.sh` on macOS)
@@ -164,7 +171,7 @@ returns immediately. (Async spawning is safe here — the nested-spawn restricti
 
 | var                  | default                                  | meaning                        |
 | -------------------- | ---------------------------------------- | ------------------------------ |
-| `DSH_SPEAK_ENGINE`   | `%USERPROFILE%\.dsh\hooks\speak.ps1`     | engine path                    |
+| `DSH_SPEAK_ENGINE`   | empty (auto-resolved)                    | engine path override; otherwise resolved as `<package>/engine/<platform script>` → `~/.dsh/hooks/<platform script>` (Windows: `speak.ps1`, macOS: `speak.sh`) |
 | `DSH_SPEAK_THROTTLE_MS` | `1500`                                | merge delay before announcing  |
 
 ## 6. Pitfalls (hard-won; do not "fix" casually)
@@ -177,6 +184,8 @@ returns immediately. (Async spawning is safe here — the nested-spawn restricti
 | 6.4 | Plugin name with a raw Windows path in `cordis.patch.yml` | plugin fails to load | `file:///C:/...` URL form |
 | 6.5 | Matching adapter voices by name only | falls back to robotic stock voice | match `Name + Description` against `Natural\|Online` |
 | 6.6 | Reading/writing speech text as ANSI | mojibake or empty speech | always UTF-8 (`[System.IO.File]::ReadAllText(..., UTF8)`) |
+| 6.7 | A repo `.sh` checked out as CRLF by `core.autocrlf=true`; `npm pack` bundles the **working-tree** file | the published `speak.sh` dies in bash on macOS (`command not found`, `syntax error near {`), silent failure | `.gitattributes` pins `*.sh text eol=lf` (check `file engine/speak.sh` for CRLF before publishing) |
+| 6.8 | Log path hard-coded as `/tmp` | on macOS `os.tmpdir()` is `/var/folders/.../T`, the log is not at `/tmp` | look for the log at `os.tmpdir()` (= `$TMPDIR`) |
 
 ## 7. Extending
 
@@ -249,8 +258,13 @@ dsh plugin --profile web add dsh-speak
 ```
 
 > No pnpm installed? `dsh plugin` forwards to pnpm; the npm equivalent is
-> `npm install --prefix "$env:USERPROFILE\.dsh\profiles\web" dsh-speak`
-> (same result: package lands in the profile's `dependencies` + `node_modules`).
+> (same result: package lands in the profile's `dependencies` + `node_modules`):
+>
+> - Windows (PowerShell):
+>   `npm install --prefix "$env:USERPROFILE\.dsh\profiles\web" dsh-speak`
+> - macOS (bash):
+>   `npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak`
+>
 > The patch watcher hot-reloads the plugin tree on `cordis.patch.yml` changes —
 > verified: the plugin re-applies with the npm-bundled engine path, no restart
-> needed for the registration switch itself.
+> needed for the registration switch itself (verified on macOS with 1.2.0).

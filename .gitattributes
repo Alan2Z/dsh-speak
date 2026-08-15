@@ -1,0 +1,5 @@
+# Shell engines must stay LF in the working tree: with core.autocrlf=true a
+# checkout rewrites them to CRLF and npm pack would ship a broken speak.sh
+# (bash dies on CRLF). eol=lf overrides autocrlf for these files.
+*.sh text eol=lf
+.gitattributes text eol=lf

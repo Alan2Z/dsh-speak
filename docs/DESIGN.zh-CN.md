@@ -10,13 +10,14 @@
 ## 1. 为什么
 
 Agent 工具会跑长任务（构建、测试、迁移、批量修改），而你正在忙别的。回复终于落地时，
-你不得不反复看屏幕。**dsh-speak** 通过 Windows 语音合成把最终回复读出来，让你
-*不用看屏幕* 就知道长任务完成了——以及结果是什么。
+你不得不反复看屏幕。**dsh-speak** 通过系统语音合成（Windows SAPI5 / macOS `say`）
+把最终回复读出来，让你*不用看屏幕* 就知道长任务完成了——以及结果是什么。
 
 最初实现是在本地 DSH（DeepSeek Harness）环境里搭建并验证过的。本仓库把这份可用的
 实现通用化为：
 
-- **与 harness 无关的引擎**（PowerShell + Windows SAPI5），任意进程都可调用；
+- **与 harness 无关的引擎**（PowerShell + Windows SAPI5 / bash + macOS `say`），
+  任意进程都可调用；
 - **适配层**，把 harness 专属事件转成引擎调用（DSH 会话事件、Claude Code Stop hook…）。
 
 ## 2. 目标 / 非目标
@@ -31,8 +32,8 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
 
 非目标（当前阶段）：
 
-- Windows 引擎（`speak.ps1`）为主；macOS 引擎（`speak.sh`，系统自带 `say`）
-  作为**实验性**随仓库发布。不支持 Linux/无头 TTS。
+- Windows 引擎（`speak.ps1`）+ macOS 引擎（`speak.sh`，系统自带 `say`）均已
+  **正式支持**（macOS 自 1.2.0 起随 npm 包分发）。不支持 Linux/无头 TTS。
 - 在仓库内打包 NaturalVoiceSAPIAdapter（仅 Windows 10 需要）或语音数据——
   它们是前置依赖，不打进仓库。
 - 流式/队列播放、按音色输出音频文件、非中文音色管理。
@@ -56,15 +57,18 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
                      | 文本                           | 文本
                      v                                v
             +---------------------------------------------------------------+
-            |               engine/speak.ps1  （与 harness 无关）           |
-            |   文本 -> 清洗(markdown/emoji/长度) -> SAPI5 Speak()          |
-            +---------------------------------------------------------------+
-                     |
-                     v
-            Windows SAPI5 (System.Speech) — 音色：
-              * 优先：自然语音 — Windows 11 内置语音包，或 Windows 10 上经
-                NaturalVoiceSAPIAdapter 注册（如 "Microsoft Xiaoxiao"）
-              * 回退：任意 zh 语音（如 "Microsoft Huihui"）
+            |               engine/speak.ps1 / speak.sh（与 harness 无关）   |
+            |   文本 -> 清洗(markdown/emoji/长度) -> 系统语音合成            |
+            +--------------------+------------------------------------------+
+                     |                                   |
+                     v                                   v
+            Windows SAPI5 (System.Speech)      macOS say（系统音色）：
+              * 优先：自然语音 — Windows 11 内置   * 默认跟随系统声音（可含
+                语音包，或 Windows 10 上经           Siri 音色，`say -v '?'`
+                NaturalVoiceSAPIAdapter 注册         不列出，无法按名选择）
+                （如 "Microsoft Xiaoxiao"）         * 或 -v 指定经典音色
+              * 回退：任意 zh 语音（如 "Microsoft     （Eddy/Tingting/Flo…）
+                Huihui"）                           * 无音量参数（随系统）
 ```
 
 ### 3.1 引擎 — `engine/speak.ps1`（macOS 上为 `engine/speak.sh`）
@@ -154,7 +158,7 @@ Claude Code *确实*有 Stop hook。hook JSON（含 `transcript_path`）从 stdi
 
 | 变量 | 默认值 | 含义 |
 | ---- | ------ | ---- |
-| `DSH_SPEAK_ENGINE` | `%USERPROFILE%\.dsh\hooks\speak.ps1` | 引擎路径 |
+| `DSH_SPEAK_ENGINE` | 空（自动解析） | 引擎路径覆盖；否则按"包内 `engine/<平台脚本>` → `~/.dsh/hooks/<平台脚本>`"顺序解析（Windows 为 `speak.ps1`，macOS 为 `speak.sh`） |
 | `DSH_SPEAK_THROTTLE_MS` | `1500` | 播报前的合并延迟（毫秒） |
 
 ## 6. 踩坑记录（来之不易；不要随意"修复"）
@@ -167,6 +171,8 @@ Claude Code *确实*有 Stop hook。hook JSON（含 `transcript_path`）从 stdi
 | 6.4 | `cordis.patch.yml` 里插件名用 Windows 原始路径 | 插件加载失败 | 用 `file:///C:/...` URL 形式 |
 | 6.5 | 只按名字匹配适配器音色 | 回退到机械感的系统语音 | 用 `Name + Description` 匹配 `Natural\|Online` |
 | 6.6 | 用 ANSI 读写播报文本 | 乱码或完全无声 | 一律 UTF-8（`[System.IO.File]::ReadAllText(..., UTF8)`） |
+| 6.7 | 仓库内 `.sh` 被 git 按 `core.autocrlf=true` 检出为 CRLF，`npm pack` 打包的是**工作区**文件 | 发布包里的 `speak.sh` 在 macOS 上 bash 语法错误（`command not found`、`syntax error near {`），静默失败 | `.gitattributes` 里 `*.sh text eol=lf` 锁定 LF（发布前 `file engine/speak.sh` 确认无 CRLF） |
+| 6.8 | 日志路径写死 `/tmp` | macOS 上 `os.tmpdir()` 是 `/var/folders/.../T`，`/tmp` 里找不到日志 | 日志路径按 `os.tmpdir()`（= `$TMPDIR`）查找 |
 
 ## 7. 扩展
 
@@ -235,8 +241,13 @@ dsh plugin --profile web add dsh-speak
 # 重启 DSH web 应用
 ```
 
-> 没装 pnpm？`dsh plugin` 内部转发给 pnpm；等价命令是
-> `npm install --prefix "$env:USERPROFILE\.dsh\profiles\web" dsh-speak`
-> （效果相同：包进入 profile 的 dependencies 与 node_modules）。
+> 没装 pnpm？`dsh plugin` 内部转发给 pnpm；等价命令（效果相同：包进入 profile
+> 的 dependencies 与 node_modules）：
+>
+> - Windows（PowerShell）：
+>   `npm install --prefix "$env:USERPROFILE\.dsh\profiles\web" dsh-speak`
+> - macOS（bash）：
+>   `npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak`
+>
 > 改 `cordis.patch.yml` 时 patch 监视器会热更新插件树——已验证：插件以 npm 包内
-> 引擎路径重新 apply，注册切换本身无需重启。
+> 引擎路径重新 apply，注册切换本身无需重启（macOS 上 1.2.0 实测通过）。

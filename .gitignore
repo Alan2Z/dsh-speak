@@ -12,3 +12,6 @@ Thumbs.db
 
 # local install artifacts (never commit a user's real paths)
 .backup/
+
+# npm pack output
+*.tgz

@@ -4,9 +4,10 @@
 
 让 Agent 在长任务完成时**开口告诉你**——不用再盯着屏幕等。
 
-dsh-speak 通过 Windows 语音合成把 Agent 的最终回复朗读出来，优先使用自然语音
-（Windows 11 内置，或 Windows 10 上经 [NaturalVoiceSAPIAdapter] 注册，如晓晓），
-没有时优雅回退到系统自带中文语音。本项目为
+dsh-speak 通过系统语音合成把 Agent 的最终回复朗读出来——Windows 上优先使用自然
+语音（Windows 11 内置，或 Windows 10 上经
+[NaturalVoiceSAPIAdapter] 注册，如晓晓），macOS 上使用系统自带的 `say`
+（可跟随 Siri 自然音色）；没有时优雅回退到系统自带中文语音。本项目为
 [DeepSeek Harness](https://github.com/deepseek-ai/dsh) 而生，但结构上
 任何 harness 都能接入。
 
@@ -21,6 +22,12 @@ dsh-speak 通过 Windows 语音合成把 Agent 的最终回复朗读出来，优
    dsh plugin --profile web add dsh-speak
    # 或（没有 pnpm 时）：
    npm install --prefix "$env:USERPROFILE\.dsh\profiles\web" dsh-speak
+   ```
+
+   macOS 上（bash）：
+
+   ```bash
+   npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
    ```
 
 2. 在 `~/.dsh/profiles/web/cordis.patch.yml` 末尾追加：
@@ -41,7 +48,7 @@ dsh-speak 通过 Windows 语音合成把 Agent 的最终回复朗读出来，优
 harness 事件（DSH 会话事件 / Claude Code Stop hook / 任意方式）
       │
       ▼  adapters/…  （harness 专属触发器：过滤、节流、取消）
-      ▼  engine/speak.ps1  （与 harness 无关：清洗文本 → Windows SAPI5）
+      ▼  engine/speak.ps1 / speak.sh  （与 harness 无关：清洗文本 → SAPI5 / say）
       ▼  🔊 你听到最终回复
 ```
 
@@ -50,14 +57,17 @@ harness 事件（DSH 会话事件 / Claude Code Stop hook / 任意方式）
 - **全自动**：DSH web 插件监听会话事件流，自动播报最终回复
   （跳过 reasoning/工具调用旁白，合并同一回复的多步消息）。
 - **尽力而为**：绝不抛错、绝不阻塞 harness、绝不破坏会话。
-- **自然语音**：优先使用自然语音——Windows 11 内置语音包，或 Windows 10 上经
-  NaturalVoiceSAPIAdapter 注册的语音（如晓晓），回退到任意已安装语音。
-- **健壮的文本清洗**：去掉会让 SAPI `Speak()` 静默失败的 markdown/URL/emoji，
+- **自然语音**：Windows 优先使用自然语音——Windows 11 内置语音包，或 Windows 10
+  上经 NaturalVoiceSAPIAdapter 注册的语音（如晓晓）；macOS 使用系统朗读声音
+  （新版可跟随 Siri 自然音色）。均回退到任意已安装语音。
+- **健壮的文本清洗**：去掉会让语音合成静默失败的 markdown/URL/emoji，
   并守卫适配器单次朗读的字数上限。
 - **引擎可移植**：任意进程一行即可朗读：
-  `powershell -File speak.ps1 -Text "你好"`。
+  Windows `powershell -File speak.ps1 -Text "你好"` / macOS `./speak.sh -t "你好"`。
 
 ## 前置条件
+
+Windows：
 
 - Windows 10 或 11，任意较新的 PowerShell。
 - 自然语音：
@@ -67,6 +77,11 @@ harness 事件（DSH 会话事件 / Claude Code Stop hook / 任意方式）
     [NaturalVoiceSAPIAdapter](https://github.com/gexgd0419/NaturalVoiceSAPIAdapter)，
     并用它的 VoiceDownloader 手动下载你需要的中文或其他语言的自然语音包。
 - 没有自然语音时，引擎回退到系统自带语音（如 Huihui）。
+
+macOS：
+
+- macOS（Apple Silicon / Intel 均可），系统自带 `say` 命令，**无需安装任何软件**。
+- 中文音色见 [macOS](#macos) 一节（含 Siri 自然音色的选择入口与坑）。
 
 ## 快速开始 — DSH
 
@@ -117,22 +132,50 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.dsh\hooks
 | `adapters/dsh/speech-hook.js` | `%USERPROFILE%\.dsh\profiles\web\plugins\` |
 | 注册条目 | 追加到 `%USERPROFILE%\.dsh\profiles\web\cordis.patch.yml`（先备份） |
 
-## macOS（实验性）
+## macOS
 
-同一套适配层可在 macOS 上运行——插件会自动检测平台，改调 `engine/speak.sh`
-（系统自带的 `say` 命令）而不是 `speak.ps1`。
+同一套适配层原生支持 macOS——插件自动检测平台，改调 `engine/speak.sh`
+（系统自带的 `say` 命令）而不是 `speak.ps1`。**自 1.2.0 起 macOS 引擎随 npm 包
+正式分发**，无需安装任何额外软件。
 
-- 音色：默认跟随**系统语音**——新版 macOS 上即 设置 → Siri → 声音 里选的
-  Siri 音色（"声音 1-4" **无法**用 `say` 按名选中，只能作为系统默认生效）。
-  想强制指定音色用 `-v Eddy|Flo|Tingting`（见 `say -v '?'`）。
-- `say` 没有音量参数——音量跟随系统输出音量。
-- 在 Mac 上装好 DSH 后，注册方式与 Windows 完全一样
-  （`dsh plugin --profile web add dsh-speak` 或文件安装）。不装 DSH 也能单独测试引擎：
+### 安装（npm 方式，与 Windows 等价）
 
 ```bash
-curl -o ~/speak.sh https://raw.githubusercontent.com/Alan2Z/dsh-speak/main/engine/speak.sh
+# 1. 装进你的 web profile（没有 pnpm 也能装——dsh plugin 才依赖 pnpm）
+npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
+
+# 2. 在 ~/.dsh/profiles/web/cordis.patch.yml 末尾注册（裸包名即可，无需 file:/// URL）：
+#    - insert:
+#        - id: speech-hook
+#          name: 'dsh-speak'
+
+# 3. 无需重启——patch 监视器会热更新；纯文字回复约 1.5 秒后自动播报
+#    （带工具调用的回复按设计不播报）
+```
+
+> 装过 pnpm 也可以 `dsh plugin --profile web add dsh-speak`，效果相同。
+
+### 音色（重要，有两个坑）
+
+- 默认跟随**系统朗读声音**（系统设置 → 辅助功能 → 朗读内容 → 系统朗读声音）。
+  **macOS 26** 上该选择框旁有个 **ⓘ 圆圈图标**，点开才是完整音色列表——普通
+  下拉框里**没有 Siri 自然音色**；可在 ⓘ 列表里选"普通话 Siri 声音1（男声）"等。
+- **Siri 声音**（设置 → Siri → 声音）与系统朗读声音是**两个独立设置**；Siri
+  音色不暴露给 `say -v '?'`，无法按名选择，只能作为系统默认生效。
+- ⚠️ **坑 1（实测复现）**：打开"朗读内容 / Siri 声音"设置面板（**哪怕不改任何
+  选项**）会把系统朗读声音漂移/重置成经典音色"婷婷(Tingting)"——音色突然变了
+  就回到 ⓘ 入口重新选择。
+- ⚠️ **坑 2**：日志在 `$TMPDIR/dsh-speech-hook.log`（`os.tmpdir()`，**不是**
+  `/tmp`）。
+- 想强制指定音色用 `-v Eddy|Flo|Tingting`（`say -v '?'` 列出可用音色）。
+- `say` 没有音量参数——音量跟随系统输出音量。
+
+### 单独测试引擎（不装 DSH 也行）
+
+```bash
+curl -sfL -o ~/speak.sh "https://cdn.jsdelivr.net/gh/Alan2Z/dsh-speak@main/engine/speak.sh"
 chmod +x ~/speak.sh
-~/speak.sh -t "你好，Mac 版语音播报测试"          # 自动选音色：Eddy / Flo / 婷婷
+~/speak.sh -t "你好，Mac 版语音播报测试"
 ~/speak.sh -t "测试" -v Eddy -r 200              # 指定音色 + 语速
 ```
 
@@ -184,7 +227,7 @@ DSH 插件环境变量：
 
 | 变量 | 默认值 | 含义 |
 | --- | ------- | ---- |
-| `DSH_SPEAK_ENGINE` | `%USERPROFILE%\.dsh\hooks\speak.ps1` | 引擎路径 |
+| `DSH_SPEAK_ENGINE` | 空（自动解析） | 引擎路径覆盖；否则按"包内 `engine/<平台脚本>` → `~/.dsh/hooks/<平台脚本>`"顺序解析（Windows `speak.ps1` / macOS `speak.sh`） |
 | `DSH_SPEAK_THROTTLE_MS` | `1500` | 播报前的合并延迟（毫秒） |
 
 ## 排障
@@ -195,14 +238,16 @@ DSH 插件环境变量：
 | 长回复从不播报 | 适配器单次 `Speak` 有字数上限 | 已默认在 300 字处守卫——必要时调低 `-MaxChars` |
 | 含大量 emoji 的文本静默 | SAPI 遇到 emoji 会静默失败 | 引擎已自动剥离 |
 | 插件加载失败 | 插件名用了 Windows 原始路径 | 改用 `file:///C:/…` URL 形式（安装脚本会自动处理） |
+| macOS：音色突然变成"婷婷" | 打开过"朗读内容 / Siri 声音"设置面板导致系统朗读声音漂移 | 系统设置 → 辅助功能 → 阅读与朗读 → 系统声音 → ⓘ 入口重新选择 |
+| macOS：在 `/tmp` 找不到日志 | `os.tmpdir()` 是 `/var/folders/.../T`，不是 `/tmp` | 日志在 `$TMPDIR/dsh-speech-hook.log` |
 
-插件诊断日志：`%TEMP%\dsh-speech-hook.log`
+插件诊断日志：Windows `%TEMP%\dsh-speech-hook.log`；macOS `$TMPDIR/dsh-speech-hook.log`
 
 ## 仓库结构
 
 ```
-engine/                  与 harness 无关的语音引擎（PowerShell + SAPI5）
-  speak.ps1              清洗 + 朗读（适配层唯一需要打交道的接口）
+engine/                  与 harness 无关的语音引擎（PowerShell + SAPI5 / bash + say）
+  speak.ps1 / speak.sh   清洗 + 朗读（适配层唯一需要打交道的接口）
   speech-prompt.ps1      阻塞式短提示播报
   speech-summary.ps1     阻塞式回复总结播报
 adapters/
