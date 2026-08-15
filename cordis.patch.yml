@@ -1,0 +1,5 @@
+# dsh-speak bundle patch: auto-register the speech-hook plugin when this package
+# is used as a DSH bundle (declared in dsh.profile.bundles).
+- insert:
+    - id: speech-hook
+      name: dsh-speak

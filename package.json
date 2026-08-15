@@ -1,17 +1,23 @@
 {
   "name": "dsh-speak",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Make your AI harness speak — verified voice announcements for DSH and other AI coding harnesses (Windows SAPI5 + macOS system voices)",
   "main": "adapters/dsh/speech-hook.js",
   "files": [
     "adapters/dsh/speech-hook.js",
     "adapters/dsh/install.ps1",
+    "cordis.patch.yml",
     "engine/",
     "docs/",
     "README.md",
     "README.zh-CN.md",
     "LICENSE"
   ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
   "keywords": [
     "dsh",
     "dsh-plugin",
