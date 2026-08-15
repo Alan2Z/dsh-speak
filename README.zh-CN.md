@@ -1,5 +1,7 @@
 # dsh-speak 🔊 — 为 AI 编程 harness 提供语音播报
 
+![鲸鱼娘大喇叭](鲸鱼娘大喇叭.png)
+
 让 Agent 在长任务完成时**开口告诉你**——不用再盯着屏幕等。
 
 dsh-speak 通过 Windows 语音合成把 Agent 的最终回复朗读出来，优先使用自然语音
