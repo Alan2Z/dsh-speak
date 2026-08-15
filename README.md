@@ -132,9 +132,10 @@ What the file installer did:
 The same adapter runs on macOS — the plugin auto-detects the platform and calls
 `engine/speak.sh` (the built-in `say` command) instead of `speak.ps1`.
 
-- Natural zh-CN voices: prefers **Eddy** / **Flo** (macOS 14+), falls back to
-  **Tingting** (婷婷). No Chinese "Siri Voice" exists yet (Siri voices are
-  English-only).
+- Voice: by default the engine follows the **system voice** — on recent macOS
+  that is the Siri voice chosen in *Settings → Siri → Voice* ("声音 1-4" are
+  **not** selectable via `say`, they only work as the system default). Use
+  `-v Eddy|Flo|Tingting` to force a specific voice (see `say -v '?'`).
 - `say` has no volume flag — volume follows the system output volume.
 - Install DSH on the Mac, then register the plugin exactly like on Windows
   (`dsh plugin --profile web add dsh-speak`, or file install). The engine alone

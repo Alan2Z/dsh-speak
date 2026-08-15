@@ -78,7 +78,8 @@ Non-goals (for now):
 The only file a new adapter needs. Two input modes: `-Text "..."` inline, or
 `-File C:\path\msg.txt` (UTF-8). Also `-Volume`, `-Rate`, `-MaxChars`,
 `-LongTextMessage` (see §5). On macOS the plugin auto-picks `speak.sh` (the
-`say` command; voice preference Eddy → Flo → Tingting; no volume flag).
+`say` command; default voice follows the system — the Siri voices "声音 1-4"
+are not exposed to `say`, use `-v` to force a name; no volume flag).
 
 Processing pipeline (in order):
 

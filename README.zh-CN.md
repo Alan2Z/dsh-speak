@@ -122,8 +122,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.dsh\hooks
 同一套适配层可在 macOS 上运行——插件会自动检测平台，改调 `engine/speak.sh`
 （系统自带的 `say` 命令）而不是 `speak.ps1`。
 
-- 自然中文语音：优先 **Eddy** / **Flo**（macOS 14+ 新增），兜底 **婷婷（Tingting）**。
-  中文目前没有 "Siri Voice"（Siri 语音仅开放了英语）。
+- 音色：默认跟随**系统语音**——新版 macOS 上即 设置 → Siri → 声音 里选的
+  Siri 音色（"声音 1-4" **无法**用 `say` 按名选中，只能作为系统默认生效）。
+  想强制指定音色用 `-v Eddy|Flo|Tingting`（见 `say -v '?'`）。
 - `say` 没有音量参数——音量跟随系统输出音量。
 - 在 Mac 上装好 DSH 后，注册方式与 Windows 完全一样
   （`dsh plugin --profile web add dsh-speak` 或文件安装）。不装 DSH 也能单独测试引擎：

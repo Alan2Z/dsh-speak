@@ -72,7 +72,8 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
 新适配器唯一需要打交道的文件。两种输入模式：`-Text "..."` 直接传入，或
 `-File C:\path\msg.txt`（UTF-8）。另有 `-Volume`、`-Rate`、`-MaxChars`、
 `-LongTextMessage`（见 §5）。在 macOS 上插件会自动改选 `speak.sh`
-（`say` 命令；音色自动优先 Eddy → Flo → 婷婷；无音量参数）。
+（`say` 命令；默认音色跟随系统——Siri 音色"声音 1-4"未暴露给 `say`，
+需用 `-v` 强制指定名字；无音量参数）。
 
 处理管线（按顺序）：
 

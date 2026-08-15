@@ -10,19 +10,26 @@
 #
 # Best-effort by design: never throws, exits 0 even if something failed.
 #
-# Voice selection (auto when -v is omitted):
-#   prefers the newer natural zh-CN voices Eddy / Flo (macOS 14+), falls back to
-#   Tingting (婷婷), then to whatever `say` auto-selects. There is no Chinese
-#   "Siri Voice" yet — Siri voices are English-only.
+# Voice selection:
+#   * no -v (default): follow the system voice — on recent macOS this is the
+#     Siri voice chosen in Settings > Siri > Voice (e.g. "声音 1"), on older
+#     versions the Spoken Content voice. This is the least surprising default.
+#   * -v <name>: force a voice by name (e.g. Eddy, Flo, Tingting — see
+#     `say -v '?'`).
+#   * NOTE: the Siri voices ("声音 1-4") are NOT exposed to `say` — they do not
+#     appear in `say -v '?'` and cannot be selected by name; they only work as
+#     the system default.
 #
 # Notes:
-#   * The cleaning pipeline mirrors speak.ps1 (markdown/URL/emoji stripped before
-#     speaking).
-#   * `say` has no volume flag — volume is controlled by the system output
-#     volume, so -Volume from the Windows API has no macOS equivalent.
-#   * Length guard: `say` chokes on very long input; text over $MAX_CHARS is
-#     replaced with $LONG_MSG (same default as the Windows engine).
+#   * LC_ALL is pinned to a UTF-8 locale so the perl cleaning pipeline and bash
+#     character counting behave identically regardless of the caller's locale
+#     (a C/POSIX locale would silently strip all CJK text).
+#   * The cleaning pipeline mirrors speak.ps1 (markdown/URL/emoji stripped).
+#   * `say` has no volume flag — volume is controlled by the system output.
+#   * Length guard: text over $MAX_CHARS is replaced with $LONG_MSG.
 # ==============================================================================
+
+export LC_ALL="${LC_ALL:-en_US.UTF-8}"
 
 TEXT=""
 FILE=""
@@ -73,18 +80,7 @@ if [ "${#TEXT}" -gt "$MAX_CHARS" ]; then
   TEXT="$LONG_MSG"
 fi
 
-# ---------- voice preference ----------
-if [ -z "$VOICE" ]; then
-  VOICES=$(say -v '?' 2>/dev/null)
-  for v in Eddy Flo Tingting; do
-    if printf '%s' "$VOICES" | grep -q "^$v "; then
-      VOICE="$v"
-      break
-    fi
-  done
-fi
-
-# ---------- speak ----------
+# ---------- speak (no -v => system default voice) ----------
 if [ -n "$VOICE" ]; then
   say -v "$VOICE" -r "$RATE" "$TEXT"
 else
