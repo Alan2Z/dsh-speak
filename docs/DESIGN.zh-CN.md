@@ -31,7 +31,8 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
 
 非目标（当前阶段）：
 
-- 跨平台引擎（macOS/Linux TTS）。设计上仅限 Windows。
+- Windows 引擎（`speak.ps1`）为主；macOS 引擎（`speak.sh`，系统自带 `say`）
+  作为**实验性**随仓库发布。不支持 Linux/无头 TTS。
 - 在仓库内打包 NaturalVoiceSAPIAdapter（仅 Windows 10 需要）或语音数据——
   它们是前置依赖，不打进仓库。
 - 流式/队列播放、按音色输出音频文件、非中文音色管理。
@@ -66,11 +67,12 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
               * 回退：任意 zh 语音（如 "Microsoft Huihui"）
 ```
 
-### 3.1 引擎 — `engine/speak.ps1`
+### 3.1 引擎 — `engine/speak.ps1`（macOS 上为 `engine/speak.sh`）
 
 新适配器唯一需要打交道的文件。两种输入模式：`-Text "..."` 直接传入，或
 `-File C:\path\msg.txt`（UTF-8）。另有 `-Volume`、`-Rate`、`-MaxChars`、
-`-LongTextMessage`（见 §5）。
+`-LongTextMessage`（见 §5）。在 macOS 上插件会自动改选 `speak.sh`
+（`say` 命令；音色自动优先 Eddy → Flo → 婷婷；无音量参数）。
 
 处理管线（按顺序）：
 

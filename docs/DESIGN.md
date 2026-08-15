@@ -35,7 +35,8 @@ Goals:
 
 Non-goals (for now):
 
-- Cross-platform engines (macOS/Linux TTS). Windows-only by design.
+- Windows engine (`speak.ps1`) is primary; a macOS engine (`speak.sh`, built-in
+  `say`) is shipped as **experimental**. Linux/headless TTS is not supported.
 - In-repo packaging of NaturalVoiceSAPIAdapter (Windows 10 only) or voice data —
   they are prerequisites, not bundled.
 - Streaming/queued playback, per-voice audio files, non-Chinese voice curation.
@@ -72,11 +73,12 @@ Non-goals (for now):
               * fallback:  any zh voice (e.g. "Microsoft Huihui")
 ```
 
-### 3.1 Engine — `engine/speak.ps1`
+### 3.1 Engine — `engine/speak.ps1` (+ `engine/speak.sh` on macOS)
 
 The only file a new adapter needs. Two input modes: `-Text "..."` inline, or
 `-File C:\path\msg.txt` (UTF-8). Also `-Volume`, `-Rate`, `-MaxChars`,
-`-LongTextMessage` (see §5).
+`-LongTextMessage` (see §5). On macOS the plugin auto-picks `speak.sh` (the
+`say` command; voice preference Eddy → Flo → Tingting; no volume flag).
 
 Processing pipeline (in order):
 

@@ -117,6 +117,24 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.dsh\hooks
 | `adapters/dsh/speech-hook.js` | `%USERPROFILE%\.dsh\profiles\web\plugins\` |
 | 注册条目 | 追加到 `%USERPROFILE%\.dsh\profiles\web\cordis.patch.yml`（先备份） |
 
+## macOS（实验性）
+
+同一套适配层可在 macOS 上运行——插件会自动检测平台，改调 `engine/speak.sh`
+（系统自带的 `say` 命令）而不是 `speak.ps1`。
+
+- 自然中文语音：优先 **Eddy** / **Flo**（macOS 14+ 新增），兜底 **婷婷（Tingting）**。
+  中文目前没有 "Siri Voice"（Siri 语音仅开放了英语）。
+- `say` 没有音量参数——音量跟随系统输出音量。
+- 在 Mac 上装好 DSH 后，注册方式与 Windows 完全一样
+  （`dsh plugin --profile web add dsh-speak` 或文件安装）。不装 DSH 也能单独测试引擎：
+
+```bash
+curl -o ~/speak.sh https://raw.githubusercontent.com/Alan2Z/dsh-speak/main/engine/speak.sh
+chmod +x ~/speak.sh
+~/speak.sh -t "你好，Mac 版语音播报测试"          # 自动选音色：Eddy / Flo / 婷婷
+~/speak.sh -t "测试" -v Eddy -r 200              # 指定音色 + 语速
+```
+
 ## 快速开始 — Claude Code
 
 在 `~/.claude/settings.json` 注册 Stop hook：

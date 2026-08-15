@@ -127,6 +127,26 @@ What the file installer did:
 | `adapters/dsh/speech-hook.js` | `%USERPROFILE%\.dsh\profiles\web\plugins\` |
 | registration entry | appended to `%USERPROFILE%\.dsh\profiles\web\cordis.patch.yml` (backed up first) |
 
+## macOS (experimental)
+
+The same adapter runs on macOS — the plugin auto-detects the platform and calls
+`engine/speak.sh` (the built-in `say` command) instead of `speak.ps1`.
+
+- Natural zh-CN voices: prefers **Eddy** / **Flo** (macOS 14+), falls back to
+  **Tingting** (婷婷). No Chinese "Siri Voice" exists yet (Siri voices are
+  English-only).
+- `say` has no volume flag — volume follows the system output volume.
+- Install DSH on the Mac, then register the plugin exactly like on Windows
+  (`dsh plugin --profile web add dsh-speak`, or file install). The engine alone
+  can be tested without DSH:
+
+```bash
+curl -o ~/speak.sh https://raw.githubusercontent.com/Alan2Z/dsh-speak/main/engine/speak.sh
+chmod +x ~/speak.sh
+~/speak.sh -t "你好，Mac 版语音播报测试"          # auto voice: Eddy / Flo / Tingting
+~/speak.sh -t "测试" -v Eddy -r 200              # explicit voice + rate
+```
+
 ## Quick start — Claude Code
 
 Register the Stop hook in `~/.claude/settings.json`:

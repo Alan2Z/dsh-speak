@@ -2,7 +2,8 @@
 // ==============================================================================
 // Listens to the session event stream (session/event), watches for
 // assistant/message append events, extracts the final reply text, and hands it to
-// engine/speak.ps1 through a hidden, non-blocking powershell process.
+// the speech engine (engine/speak.ps1 on Windows, engine/speak.sh on macOS)
+// through a hidden, non-blocking child process.
 //
 // Trigger semantics:
 //   * only events with a `text` block are announced (reasoning / tool_use blocks
@@ -20,9 +21,9 @@
 // (run adapters/dsh/install.ps1 to do this automatically for the file install)
 //
 // Configuration (environment variables, optional):
-//   DSH_SPEAK_ENGINE      path to engine/speak.ps1
-//                         (default: <package>/engine/speak.ps1, then
-//                          %USERPROFILE%\.dsh\hooks\speak.ps1)
+//   DSH_SPEAK_ENGINE      path to the engine script (speak.ps1 / speak.sh)
+//                         (default: <package>/engine/<platform script>, then
+//                          ~/.dsh/hooks/<platform script>)
 //   DSH_SPEAK_THROTTLE_MS throttle delay before announcing (default: 1500)
 'use strict'
 const { spawn } = require('child_process')
@@ -39,19 +40,20 @@ function log(...args) {
 }
 
 const THROTTLE_MS = Number(process.env.DSH_SPEAK_THROTTLE_MS) || 1500
+const ENGINE_NAME = process.platform === 'darwin' ? 'speak.sh' : 'speak.ps1'
 
 /**
- * Locate engine/speak.ps1:
+ * Locate the engine script:
  *   1. explicit DSH_SPEAK_ENGINE override
- *   2. <this package>/engine/speak.ps1 — works both when running from a repo
- *      checkout and when installed into a profile's node_modules (npm install)
- *   3. legacy file-copy location (~/.dsh/hooks/speak.ps1) from install.ps1
+ *   2. <this package>/engine/<speak.ps1|speak.sh> — works both when running from
+ *      a repo checkout and when installed into a profile's node_modules
+ *   3. legacy file-copy location (~/.dsh/hooks/<speak.ps1|speak.sh>)
  */
 function resolveEngine() {
   if (process.env.DSH_SPEAK_ENGINE) return process.env.DSH_SPEAK_ENGINE
-  const bundled = path.join(__dirname, '..', '..', 'engine', 'speak.ps1')
+  const bundled = path.join(__dirname, '..', '..', 'engine', ENGINE_NAME)
   if (fs.existsSync(bundled)) return bundled
-  return path.join(process.env.USERPROFILE, '.dsh', 'hooks', 'speak.ps1')
+  return path.join(os.homedir(), '.dsh', 'hooks', ENGINE_NAME)
 }
 const SPEAK_ENGINE = resolveEngine()
 
@@ -77,10 +79,17 @@ module.exports = {
         log('写临时文件失败:', e.message)
         return
       }
-      const ps = spawn('powershell.exe',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', SPEAK_ENGINE, '-File', tmp],
-        { windowsHide: true, stdio: 'ignore' })
-      log('spawn powershell 已发起')
+      let ps
+      if (process.platform === 'darwin') {
+        // macOS: run the say-based engine through bash
+        ps = spawn('/bin/bash', [SPEAK_ENGINE, '-f', tmp], { stdio: 'ignore' })
+        log('spawn bash (macOS engine) 已发起')
+      } else {
+        ps = spawn('powershell.exe',
+          ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', SPEAK_ENGINE, '-File', tmp],
+          { windowsHide: true, stdio: 'ignore' })
+        log('spawn powershell 已发起')
+      }
       ps.on('exit', (code) => { log('播报进程退出 code=', code); try { fs.unlinkSync(tmp) } catch (e) { /* 清理 */ } })
       ps.on('error', (e) => { log('播报进程 error:', e.message); try { fs.unlinkSync(tmp) } catch (e2) { /* 清理 */ } })
     }
