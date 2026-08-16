@@ -247,6 +247,33 @@ DSH plugin environment variables:
 | `DSH_SPEAK_ENGINE` | empty (auto-resolved) | engine path override; otherwise resolved as `<package>/engine/<platform script>` → `~/.dsh/hooks/<platform script>` (Windows `speak.ps1` / macOS `speak.sh`) |
 | `DSH_SPEAK_THROTTLE_MS` | `1500` | merge delay before announcing |
 
+## Customizing (survives npm updates)
+
+You can tune behavior without forking, and your changes **survive `npm update`**:
+
+1. **Copy the engine out and edit it** (recommended — this is where defaults live: volume,
+   rate, `MaxChars`, `LongTextMessage`, voice logic):
+
+   ```powershell
+   # Windows
+   Copy-Item "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-speak\engine\speak.ps1" "$env:USERPROFILE\.dsh\hooks\my-speak.ps1"
+   # macOS
+   cp ~/.dsh/profiles/web/node_modules/dsh-speak/engine/speak.sh ~/.dsh/hooks/my-speak.sh
+   # edit my-speak.ps1 / my-speak.sh to taste, then point the plugin at it:
+   setx DSH_SPEAK_ENGINE "$env:USERPROFILE\.dsh\hooks\my-speak.ps1"     # Windows
+   echo 'export DSH_SPEAK_ENGINE=~/.dsh/hooks/my-speak.sh' >> ~/.zshrc  # macOS
+   ```
+
+   The plugin resolves the engine as `DSH_SPEAK_ENGINE` → package engine → `~/.dsh/hooks/`,
+   so your copy wins. `npm update` only touches the package — your engine stays.
+
+2. **Environment variables** (no code changes): `DSH_SPEAK_ENGINE` (engine path),
+   `DSH_SPEAK_THROTTLE_MS` (announcement merge delay).
+
+3. **Edit the file inside `node_modules`** — works, but the next `npm update` overwrites it.
+
+4. **Fork the repo** — full control, publish your own package if you want.
+
 ## Troubleshooting
 
 | symptom | cause | fix |

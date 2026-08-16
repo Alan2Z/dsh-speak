@@ -232,6 +232,31 @@ DSH 插件环境变量：
 | `DSH_SPEAK_ENGINE` | 空（自动解析） | 引擎路径覆盖；否则按"包内 `engine/<平台脚本>` → `~/.dsh/hooks/<平台脚本>`"顺序解析（Windows `speak.ps1` / macOS `speak.sh`） |
 | `DSH_SPEAK_THROTTLE_MS` | `1500` | 播报前的合并延迟（毫秒） |
 
+## 自定义（升级不丢）
+
+想调行为又不想 fork，而且改完**不会被 `npm update` 覆盖**：
+
+1. **把引擎复制出来改**（推荐——默认参数都在这：音量、语速、字数上限、超长提示语、音色逻辑）：
+
+   ```powershell
+   # Windows
+   Copy-Item "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-speak\engine\speak.ps1" "$env:USERPROFILE\.dsh\hooks\my-speak.ps1"
+   # macOS
+   cp ~/.dsh/profiles/web/node_modules/dsh-speak/engine/speak.sh ~/.dsh/hooks/my-speak.sh
+   # 按喜好编辑 my-speak.ps1 / my-speak.sh，然后让插件指向它：
+   setx DSH_SPEAK_ENGINE "$env:USERPROFILE\.dsh\hooks\my-speak.ps1"     # Windows
+   echo 'export DSH_SPEAK_ENGINE=~/.dsh/hooks/my-speak.sh' >> ~/.zshrc  # macOS
+   ```
+
+   插件按 `DSH_SPEAK_ENGINE` → 包内引擎 → `~/.dsh/hooks/` 的顺序解析引擎，所以你的副本
+   优先生效；`npm update` 只动包本身，你的引擎安然无恙。
+
+2. **环境变量**（零改代码）：`DSH_SPEAK_ENGINE`（引擎路径）、`DSH_SPEAK_THROTTLE_MS`（播报合并延迟）。
+
+3. **直接改 `node_modules` 里的文件**——能改，但下次 `npm update` 会被覆盖。
+
+4. **fork 仓库**——完全掌控，想发自己的包也行。
+
 ## 排障
 
 | 现象 | 原因 | 解决 |
