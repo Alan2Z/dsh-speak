@@ -4,6 +4,8 @@
 
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
+[![npm version](https://img.shields.io/npm/v/dsh-speak)](https://www.npmjs.com/package/dsh-speak)
+
 让 Agent 在长任务完成时**开口告诉你**——不用再盯着屏幕等。
 
 dsh-speak 通过系统语音合成把 Agent 的最终回复朗读出来——Windows 上优先使用自然
@@ -68,6 +70,14 @@ harness 事件（DSH 会话事件 / Claude Code Stop hook / 任意方式）
   并守卫适配器单次朗读的字数上限。
 - **引擎可移植**：任意进程一行即可朗读：
   Windows `powershell -File speak.ps1 -Text "你好"` / macOS `./speak.sh -t "你好"`。
+
+- **审批与提问播报**（1.4.0）：审批请求到达立即播报（念出审批原因，无原因则念
+
+  固定提示语）；`ask_user_question` 提问会保留并播报待播报文本，用户能听到问题。
+
+- **Bundle 自动注册**（1.3.0）：把包声明进 `dsh.profile.bundles`，插件通过包内
+
+  自带的 `cordis.patch.yml` 自动注册，无需手动写 patch 条目。
 
 ## 前置条件
 
