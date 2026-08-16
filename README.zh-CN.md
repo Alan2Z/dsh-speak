@@ -231,12 +231,26 @@ powershell -NoProfile -ExecutionPolicy Bypass -File engine\speech-prompt.ps1 -Te
 speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次播报内容较长，请自行阅读。"
 ```
 
-DSH 插件环境变量：
+DSH 插件配置——**优先用 profile patch 的 `config` 块**（`dsh --dump-config` 可见、按 profile 隔离、升级不丢）：
 
-| 变量 | 默认值 | 含义 |
-| --- | ------- | ---- |
-| `DSH_SPEAK_ENGINE` | 空（自动解析） | 引擎路径覆盖；否则按"包内 `engine/<平台脚本>` → `~/.dsh/hooks/<平台脚本>`"顺序解析（Windows `speak.ps1` / macOS `speak.sh`） |
-| `DSH_SPEAK_THROTTLE_MS` | `1500` | 播报前的合并延迟（毫秒） |
+```yaml
+# ~/.dsh/profiles/web/cordis.patch.yml
+- insert:
+    - id: speech-hook
+      name: 'dsh-speak'
+      config:
+        throttleMs: 1500        # 播报前的合并延迟（毫秒）
+        engine: ''              # 引擎路径覆盖；'' = 自动解析
+        announceApprovals: true # 播报审批请求
+        announceQuestions: true # 播报 ask_user_question 提问内容
+        stripApprovalPrefix: true  # 剥离审批原因里的 "escalate sandbox to ...: " 前缀
+        longTextMode: message   # message | heading（念最大字号 markdown 标题）
+        maxChars: 300           # 引擎单次朗读字数上限
+        volume: 50              # 仅 Windows
+        rate: 0                 # 0 = 引擎默认（Windows SAPI 刻度 / macOS wpm）
+```
+
+完整自定义指南见 [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.zh-CN.md)。
 
 ## 自定义（升级不丢）
 
@@ -249,19 +263,24 @@ DSH 插件环境变量：
    Copy-Item "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-speak\engine\speak.ps1" "$env:USERPROFILE\.dsh\hooks\my-speak.ps1"
    # macOS
    cp ~/.dsh/profiles/web/node_modules/dsh-speak/engine/speak.sh ~/.dsh/hooks/my-speak.sh
-   # 按喜好编辑 my-speak.ps1 / my-speak.sh，然后让插件指向它：
-   setx DSH_SPEAK_ENGINE "$env:USERPROFILE\.dsh\hooks\my-speak.ps1"     # Windows
-   echo 'export DSH_SPEAK_ENGINE=~/.dsh/hooks/my-speak.sh' >> ~/.zshrc  # macOS
    ```
 
-   插件按 `DSH_SPEAK_ENGINE` → 包内引擎 → `~/.dsh/hooks/` 的顺序解析引擎，所以你的副本
+   然后在 config 块里指向你的副本：
+
+   ```yaml
+   - insert:
+       - id: speech-hook
+         name: 'dsh-speak'
+         config:
+           engine: 'C:/Users/<你>/.dsh/hooks/my-speak.ps1'   # macOS 用 ~/.dsh/hooks/my-speak.sh
+   ```
+
+   插件按 `config.engine` → 包内引擎 → `~/.dsh/hooks/` 的顺序解析引擎，所以你的副本
    优先生效；`npm update` 只动包本身，你的引擎安然无恙。
 
-2. **环境变量**（零改代码）：`DSH_SPEAK_ENGINE`（引擎路径）、`DSH_SPEAK_THROTTLE_MS`（播报合并延迟）。
+2. **直接改 `node_modules` 里的文件**——能改，但下次 `npm update` 会被覆盖。
 
-3. **直接改 `node_modules` 里的文件**——能改，但下次 `npm update` 会被覆盖。
-
-4. **fork 仓库**——完全掌控，想发自己的包也行。
+3. **fork 仓库**——完全掌控，想发自己的包也行。
 
 ## 排障
 

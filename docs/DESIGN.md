@@ -168,13 +168,24 @@ returns immediately. (Async spawning is safe here — the nested-spawn restricti
 | `-Rate`           | `1`                         | speech rate (SAPI scale)                 |
 | `-MaxChars`       | `300`                       | beyond this, replaced by `LongTextMessage` |
 | `-LongTextMessage`| `本次播报内容较长，请自行阅读。` | spoken instead of over-long text         |
+| `-LongTextMode`   | `message`                    | `message` (fixed prompt) \| `heading` (speak the largest markdown heading) |
 
-### DSH plugin (environment variables)
+### DSH plugin (profile `config` — recommended; env vars are legacy fallbacks)
 
-| var                  | default                                  | meaning                        |
-| -------------------- | ---------------------------------------- | ------------------------------ |
-| `DSH_SPEAK_ENGINE`   | empty (auto-resolved)                    | engine path override; otherwise resolved as `<package>/engine/<platform script>` → `~/.dsh/hooks/<platform script>` (Windows: `speak.ps1`, macOS: `speak.sh`) |
-| `DSH_SPEAK_THROTTLE_MS` | `1500`                                | merge delay before announcing  |
+```yaml
+config:
+  throttleMs: 1500
+  engine: ''                 # '' = auto-resolve
+  announceApprovals: true
+  announceQuestions: true
+  stripApprovalPrefix: true
+  longTextMode: message      # message | heading
+  maxChars: 300
+  volume: 50                 # Windows only
+  rate: 0                    # 0 = engine default
+```
+
+Full guide: docs/CUSTOMIZATION.md.
 
 ## 6. Pitfalls (hard-won; do not "fix" casually)
 
@@ -227,7 +238,7 @@ dependencies in the profile). This repository is prepared for that path:
 
 `speech-hook.js` locates `engine/speak.ps1` in this order:
 
-1. `DSH_SPEAK_ENGINE` environment override;
+1. `config.engine` override;
 2. `<package>/engine/speak.ps1` resolved relative to the plugin file — covers
    both a repo checkout and `node_modules/dsh-speak/` after `npm install`;
 3. legacy `%USERPROFILE%\.dsh\hooks\speak.ps1` (the file-install location).

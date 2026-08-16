@@ -29,7 +29,9 @@ param(
     [int]$Volume = 50,
     [int]$Rate = 1,
     [int]$MaxChars = 300,
-    [string]$LongTextMessage = '本次播报内容较长，请自行阅读。'
+    [string]$LongTextMessage = '本次播报内容较长，请自行阅读。',
+    [ValidateSet('message', 'heading')]
+    [string]$LongTextMode = 'message'
 )
 
 # ---------- input: pick text source ----------
@@ -40,6 +42,29 @@ if ($File) {
     $text = [string]$Text
 }
 if (-not $text -or -not $text.Trim()) { exit 0 }
+
+# ---------- length guard: adapter per-Speak ceiling ----------
+# 'message': fixed prompt. 'heading': speak the largest markdown heading instead
+# (fewest '#' wins, tie -> first; no heading -> first non-empty line; the
+# cleaned candidate is still subject to the ceiling below).
+if ($text.Length -gt $MaxChars -and $LongTextMode -eq 'heading') {
+    $candidate = ''
+    $bestLevel = 7
+    $firstNonEmpty = ''
+    foreach ($line in ($text -split "`n")) {
+        if ($line -match '^\s*#{1,6}\s+') {
+            $level = ([regex]::Match($line, '^(\s*)(#+)')).Groups[2].Value.Length
+            if ($level -lt $bestLevel) {
+                $bestLevel = $level
+                $candidate = $line -replace '^\s*#+\s*', ''
+            }
+        } elseif (-not $firstNonEmpty -and $line.Trim()) {
+            $firstNonEmpty = $line
+        }
+    }
+    if (-not $candidate) { $candidate = $firstNonEmpty }
+    if ($candidate) { $text = $candidate }
+}
 
 # ---------- clean: markdown -> plain speech text ----------
 # code blocks, inline code, markdown links, bare URLs, emphasis/marker chars
@@ -54,7 +79,7 @@ $text = [regex]::Replace($text, '[^一-龥　-〿＀-￯ -⁯ -~]', '')
 $text = $text -replace '\s+', ' '
 $text = $text.Trim()
 
-# ---------- length guard: adapter per-Speak ceiling ----------
+# ---------- final ceiling (also catches over-long heading candidates) ----------
 if ($text.Length -gt $MaxChars) { $text = $LongTextMessage }
 
 # ---------- speak ----------

@@ -247,12 +247,27 @@ Engine parameters (see [docs/DESIGN.md](docs/DESIGN.md#5-configuration-reference
 speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次播报内容较长，请自行阅读。"
 ```
 
-DSH plugin environment variables:
+DSH plugin configuration — **prefer the profile patch `config` block** (visible in
+`dsh --dump-config`, per-profile, survives npm updates):
 
-| var | default | meaning |
-| --- | ------- | ------- |
-| `DSH_SPEAK_ENGINE` | empty (auto-resolved) | engine path override; otherwise resolved as `<package>/engine/<platform script>` → `~/.dsh/hooks/<platform script>` (Windows `speak.ps1` / macOS `speak.sh`) |
-| `DSH_SPEAK_THROTTLE_MS` | `1500` | merge delay before announcing |
+```yaml
+# ~/.dsh/profiles/web/cordis.patch.yml
+- insert:
+    - id: speech-hook
+      name: 'dsh-speak'
+      config:
+        throttleMs: 1500        # merge delay before announcing (ms)
+        engine: ''              # engine path override; '' = auto-resolve
+        announceApprovals: true # speak approval requests
+        announceQuestions: true # speak ask_user_question content
+        stripApprovalPrefix: true  # strip the "escalate sandbox to ...: " prefix
+        longTextMode: message   # message | heading (speak largest md heading)
+        maxChars: 300           # engine per-utterance ceiling
+        volume: 50              # Windows only
+        rate: 0                 # 0 = engine default (Windows SAPI scale / macOS wpm)
+```
+
+See [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.md) for the full customization guide.
 
 ## Customizing (survives npm updates)
 
@@ -266,20 +281,24 @@ You can tune behavior without forking, and your changes **survive `npm update`**
    Copy-Item "$env:USERPROFILE\.dsh\profiles\web\node_modules\dsh-speak\engine\speak.ps1" "$env:USERPROFILE\.dsh\hooks\my-speak.ps1"
    # macOS
    cp ~/.dsh/profiles/web/node_modules/dsh-speak/engine/speak.sh ~/.dsh/hooks/my-speak.sh
-   # edit my-speak.ps1 / my-speak.sh to taste, then point the plugin at it:
-   setx DSH_SPEAK_ENGINE "$env:USERPROFILE\.dsh\hooks\my-speak.ps1"     # Windows
-   echo 'export DSH_SPEAK_ENGINE=~/.dsh/hooks/my-speak.sh' >> ~/.zshrc  # macOS
    ```
 
-   The plugin resolves the engine as `DSH_SPEAK_ENGINE` → package engine → `~/.dsh/hooks/`,
+   Then point the plugin at your copy in the `config` block:
+
+   ```yaml
+   - insert:
+       - id: speech-hook
+         name: 'dsh-speak'
+         config:
+           engine: 'C:/Users/<you>/.dsh/hooks/my-speak.ps1'   # or ~/.dsh/hooks/my-speak.sh on macOS
+   ```
+
+   The plugin resolves the engine as `config.engine` → package engine → `~/.dsh/hooks/`,
    so your copy wins. `npm update` only touches the package — your engine stays.
 
-2. **Environment variables** (no code changes): `DSH_SPEAK_ENGINE` (engine path),
-   `DSH_SPEAK_THROTTLE_MS` (announcement merge delay).
+2. **Edit the file inside `node_modules`** — works, but the next `npm update` overwrites it.
 
-3. **Edit the file inside `node_modules`** — works, but the next `npm update` overwrites it.
-
-4. **Fork the repo** — full control, publish your own package if you want.
+3. **Fork the repo** — full control, publish your own package if you want.
 
 ## Troubleshooting
 

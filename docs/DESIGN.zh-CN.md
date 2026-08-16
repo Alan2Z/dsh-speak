@@ -155,13 +155,24 @@ Claude Code *确实*有 Stop hook。hook JSON（含 `transcript_path`）从 stdi
 | `-Rate` | `1` | 语速（SAPI 刻度） |
 | `-MaxChars` | `300` | 超过此长度时替换为 `LongTextMessage` |
 | `-LongTextMessage` | `本次播报内容较长，请自行阅读。` | 超长文本时改念这句 |
+| `-LongTextMode` | `message` | `message`（固定提示语）\| `heading`（念最大字号 markdown 标题） |
 
-### DSH 插件（环境变量）
+### DSH 插件（profile `config` —— 推荐）
 
-| 变量 | 默认值 | 含义 |
-| ---- | ------ | ---- |
-| `DSH_SPEAK_ENGINE` | 空（自动解析） | 引擎路径覆盖；否则按"包内 `engine/<平台脚本>` → `~/.dsh/hooks/<平台脚本>`"顺序解析（Windows 为 `speak.ps1`，macOS 为 `speak.sh`） |
-| `DSH_SPEAK_THROTTLE_MS` | `1500` | 播报前的合并延迟（毫秒） |
+```yaml
+config:
+  throttleMs: 1500
+  engine: ''                 # '' = 自动解析
+  announceApprovals: true
+  announceQuestions: true
+  stripApprovalPrefix: true
+  longTextMode: message      # message | heading
+  maxChars: 300
+  volume: 50                 # 仅 Windows
+  rate: 0                    # 0 = 引擎默认
+```
+
+完整指南：docs/CUSTOMIZATION.zh-CN.md。
 
 ## 6. 踩坑记录（来之不易；不要随意"修复"）
 
@@ -212,7 +223,7 @@ DSH 的插件机制基于 Cordis，官方安装树外插件的路径是
 
 `speech-hook.js` 按以下顺序定位 `engine/speak.ps1`：
 
-1. `DSH_SPEAK_ENGINE` 环境变量覆盖；
+1. `config.engine` 覆盖；
 2. 相对插件文件解析 `<包>/engine/speak.ps1`——同时覆盖仓库检出和
    `npm install` 后的 `node_modules/dsh-speak/`；
 3. 旧的 `%USERPROFILE%\.dsh\hooks\speak.ps1`（文件安装的位置）。

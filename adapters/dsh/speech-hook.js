@@ -8,12 +8,11 @@
 // Trigger semantics:
 //   * only events with a `text` block are announced (reasoning / tool_use blocks
 //     are skipped)
-//   * when a tool/call event arrives, that round's assistant text is treated as
-//     process narration, so any pending announcement is cancelled — EXCEPT a
-//     call to `ask_user_question`, which is a question for the user and keeps
-//     the pending text so it is announced
-//   * `approval/asked` is announced immediately (approval reason, or a fixed
-//     prompt) since approvals are time-sensitive
+//   * a tool/call to `ask_user_question` announces the parsed question
+//     (title + single/multi + options); other tool calls cancel the pending
+//     announcement (that round's assistant text is process narration)
+//   * `approval/asked` is announced immediately (reason with the fixed English
+//     template prefix stripped, or a fixed prompt)
 //   * a final reply with no following tool/call is announced after a throttle
 //     delay (merges multi-step messages from the same reply)
 //
@@ -24,11 +23,20 @@
 //         name: 'file:///C:/Users/<your-username>/.../speech-hook.js'   # repo/file install (replace <your-username>)
 // (run adapters/dsh/install.ps1 to do this automatically for the file install)
 //
-// Configuration (environment variables, optional):
-//   DSH_SPEAK_ENGINE      path to the engine script (speak.ps1 / speak.sh)
-//                         (default: <package>/engine/<platform script>, then
-//                          ~/.dsh/hooks/<platform script>)
-//   DSH_SPEAK_THROTTLE_MS throttle delay before announcing (default: 1500)
+// Configuration — prefer the profile patch `config` block (see docs/CUSTOMIZATION.md):
+//   - insert:
+//       - id: speech-hook
+//         name: 'dsh-speak'
+//         config:
+//           throttleMs: 1500        # merge delay before announcing (ms)
+//           engine: ''              # engine path override; '' = auto-resolve
+//           announceApprovals: true # speak approval requests
+//           announceQuestions: true # speak ask_user_question content
+//           stripApprovalPrefix: true  # strip "escalate sandbox to ...: " prefix
+//           longTextMode: message   # message | heading (speak largest md heading)
+//           maxChars: 300           # engine per-utterance ceiling
+//           volume: 50              # Windows only
+//           rate: 0                 # 0 = engine default (Windows SAPI scale / macOS wpm)
 'use strict'
 const { spawn } = require('child_process')
 const fs = require('fs')
@@ -43,27 +51,40 @@ function log(...args) {
   } catch (e) { /* ignore */ }
 }
 
-const THROTTLE_MS = Number(process.env.DSH_SPEAK_THROTTLE_MS) || 1500
 const ENGINE_NAME = process.platform === 'darwin' ? 'speak.sh' : 'speak.ps1'
 
 /**
  * Locate the engine script:
- *   1. explicit DSH_SPEAK_ENGINE override
+ *   1. explicit override (config `engine`)
  *   2. <this package>/engine/<speak.ps1|speak.sh> — works both when running from
  *      a repo checkout and when installed into a profile's node_modules
  *   3. legacy file-copy location (~/.dsh/hooks/<speak.ps1|speak.sh>)
  */
-function resolveEngine() {
-  if (process.env.DSH_SPEAK_ENGINE) return process.env.DSH_SPEAK_ENGINE
+function resolveEngine(override) {
+  if (override) return override
   const bundled = path.join(__dirname, '..', '..', 'engine', ENGINE_NAME)
   if (fs.existsSync(bundled)) return bundled
   return path.join(os.homedir(), '.dsh', 'hooks', ENGINE_NAME)
 }
-const SPEAK_ENGINE = resolveEngine()
 
 module.exports = {
-  apply(ctx) {
-    log('plugin apply 执行（加载成功）; engine=', SPEAK_ENGINE, '; throttle=', THROTTLE_MS)
+  apply(ctx, config) {
+    config = config || {}
+    // resolved settings: config > default
+    const cfg = {
+      throttleMs: Number(config.throttleMs != null ? config.throttleMs : 1500) || 1500,
+      engine: resolveEngine(config.engine || ''),
+      announceApprovals: config.announceApprovals !== false,
+      announceQuestions: config.announceQuestions !== false,
+      stripApprovalPrefix: config.stripApprovalPrefix !== false,
+      longTextMode: config.longTextMode || 'message',
+      maxChars: Number(config.maxChars != null ? config.maxChars : 300) || 300,
+      volume: Number(config.volume != null ? config.volume : 50) || 50,
+      rate: Number(config.rate != null ? config.rate : 0) || 0,
+    }
+    log('plugin apply 执行（加载成功）; engine=', cfg.engine, '; throttle=', cfg.throttleMs,
+      '; longTextMode=', cfg.longTextMode, '; maxChars=', cfg.maxChars)
+
     let timer = null
     let pendingText = ''
 
@@ -86,11 +107,18 @@ module.exports = {
       let ps
       if (process.platform === 'darwin') {
         // macOS: run the say-based engine through bash
-        ps = spawn('/bin/bash', [SPEAK_ENGINE, '-f', tmp], { stdio: 'ignore' })
-        log('spawn bash (macOS engine) 已发起')
+        const args = ['-f', tmp, '-m', String(cfg.maxChars), '-M', cfg.longTextMode]
+        if (cfg.rate > 0) args.push('-r', String(cfg.rate))
+        ps = spawn('/bin/bash', [cfg.engine].concat(args), { stdio: 'ignore' })
+        log('spawn bash (macOS engine) 已发起:', args.join(' '))
       } else {
         ps = spawn('powershell.exe',
-          ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', SPEAK_ENGINE, '-File', tmp],
+          ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', cfg.engine,
+            '-File', tmp,
+            '-Volume', String(cfg.volume),
+            '-Rate', String(cfg.rate > 0 ? cfg.rate : 1),
+            '-MaxChars', String(cfg.maxChars),
+            '-LongTextMode', cfg.longTextMode],
           { windowsHide: true, stdio: 'ignore' })
         log('spawn powershell 已发起')
       }
@@ -105,14 +133,31 @@ module.exports = {
         if (type !== 'assistant/chunk') {
           log('事件 type=', type, 'surfaceOp=', event && event.surfaceOp, 'seq=', event && event.seq)
         }
-        // tool-call round: a call to ask_user_question is a question to the
-        // user — keep the pending text so it gets announced (the user should
-        // hear the question); any other tool call cancels the pending
-        // announcement (that round's assistant text is process narration)
+        // tool-call round: a call to ask_user_question announces the parsed
+        // question (title + mode + options); any other tool call cancels the
+        // pending announcement (that round's assistant text is narration)
         if (type === 'tool/call') {
           const toolName = event.data && event.data.name
-          if (toolName === 'ask_user_question') {
-            log('提问工具调用（ask_user_question）— 保留待播报文本')
+          if (toolName === 'ask_user_question' && cfg.announceQuestions) {
+            let spoken = ''
+            try {
+              const args = JSON.parse((event.data && event.data.arguments) || '{}')
+              const qs = Array.isArray(args.questions) ? args.questions : []
+              spoken = qs.map((q) => {
+                const mode = q.multi_select ? '多选' : '单选'
+                const labels = Array.isArray(q.options)
+                  ? q.options.map((o) => o.label).filter(Boolean).join('、')
+                  : ''
+                return (q.question || '') + '（' + mode + '）' + (labels ? '，选项：' + labels : '')
+              }).filter(Boolean).join('；')
+            } catch (e) { /* arguments 解析失败则回退原逻辑 */ }
+            if (spoken) {
+              cancelPending()
+              log('提问播报:', spoken.slice(0, 120))
+              speak(spoken)
+            } else {
+              log('提问工具调用（ask_user_question）— 保留待播报文本')
+            }
             return
           }
           cancelPending()
@@ -120,10 +165,15 @@ module.exports = {
         }
         // approval requested: announce it right away (time-sensitive), using
         // the approval reason if present
-        if (type === 'approval/asked') {
+        if (type === 'approval/asked' && cfg.announceApprovals) {
           cancelPending()
-          const reason = event.data && event.data.reason
-          const text = reason && reason.trim() ? reason : '需要你的审批，请查看界面。'
+          let reason = (event.data && event.data.reason) || ''
+          if (cfg.stripApprovalPrefix) {
+            // strip the fixed English template prefix (e.g. "escalate sandbox
+            // to danger-full-access: "), keep the human explanation
+            reason = reason.replace(/^escalate sandbox to danger-full-access\s*:\s*/i, '').trim()
+          }
+          const text = reason || '需要你的审批，请查看界面。'
           log('审批请求，播报:', text.slice(0, 60))
           speak(text)
           return
@@ -154,7 +204,7 @@ module.exports = {
           speak(pendingText)
           pendingText = ''
           timer = null
-        }, THROTTLE_MS)
+        }, cfg.throttleMs)
       } catch (e) {
         log('事件处理异常:', e.message)
       }

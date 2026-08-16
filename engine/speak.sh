@@ -37,13 +37,14 @@ VOICE=""
 RATE=175          # words per minute (say default)
 MAX_CHARS=300
 LONG_MSG="本次播报内容较长，请自行阅读。"
+LONG_MODE="message"   # message | heading
 
 usage() {
-  echo "usage: speak.sh [-t text | -f file] [-v voice] [-r wpm] [-m maxchars] [-l longmsg]" >&2
+  echo "usage: speak.sh [-t text | -f file] [-v voice] [-r wpm] [-m maxchars] [-l longmsg] [-M message|heading]" >&2
   exit 1
 }
 
-while getopts "t:f:v:r:m:l:h" opt; do
+while getopts "t:f:v:r:m:l:M:h" opt; do
   case "$opt" in
     t) TEXT="$OPTARG" ;;
     f) FILE="$OPTARG" ;;
@@ -51,6 +52,7 @@ while getopts "t:f:v:r:m:l:h" opt; do
     r) RATE="$OPTARG" ;;
     m) MAX_CHARS="$OPTARG" ;;
     l) LONG_MSG="$OPTARG" ;;
+    M) LONG_MODE="$OPTARG" ;;
     h) usage ;;
     *) usage ;;
   esac
@@ -62,6 +64,26 @@ if [ -n "$FILE" ]; then
   TEXT=$(/usr/bin/perl -CSD -e 'print <>' "$FILE")
 fi
 if [ -z "$TEXT" ]; then exit 0; fi
+
+# ---------- length guard / long-text mode ----------
+# 'message': fixed prompt. 'heading': speak the largest markdown heading instead
+# (fewest '#' wins, tie -> first; no heading -> first non-empty line; the
+# cleaned candidate is still subject to the ceiling below).
+if [ "${#TEXT}" -gt "$MAX_CHARS" ] && [ "$LONG_MODE" = "heading" ]; then
+  TEXT=$(printf '%s' "$TEXT" | /usr/bin/perl -CSD -e '
+    my $best = 7; my $cand = ""; my $first = "";
+    while (<STDIN>) {
+      if (/^[ \t]*(\#{1,6})[ \t]+(.*)$/) {
+        my $n = length($1);
+        if ($n < $best) { $best = $n; $cand = $2; }
+      } elsif ($first eq "" && /\S/) {
+        $first = $_;
+      }
+    }
+    $cand = $first if $cand eq "";
+    print $cand;
+  ')
+fi
 
 # ---------- clean (mirrors speak.ps1) ----------
 TEXT=$(printf '%s' "$TEXT" | /usr/bin/perl -CSD -pe '
@@ -75,7 +97,7 @@ TEXT=$(printf '%s' "$TEXT" | /usr/bin/perl -CSD -pe '
 ')
 TEXT=$(printf '%s' "$TEXT" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 
-# ---------- length guard ----------
+# ---------- final ceiling (also catches over-long heading candidates) ----------
 if [ "${#TEXT}" -gt "$MAX_CHARS" ]; then
   TEXT="$LONG_MSG"
 fi
