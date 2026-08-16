@@ -9,7 +9,11 @@
 //   * only events with a `text` block are announced (reasoning / tool_use blocks
 //     are skipped)
 //   * when a tool/call event arrives, that round's assistant text is treated as
-//     process narration, so any pending announcement is cancelled
+//     process narration, so any pending announcement is cancelled — EXCEPT a
+//     call to `ask_user_question`, which is a question for the user and keeps
+//     the pending text so it is announced
+//   * `approval/asked` is announced immediately (approval reason, or a fixed
+//     prompt) since approvals are time-sensitive
 //   * a final reply with no following tool/call is announced after a throttle
 //     delay (merges multi-step messages from the same reply)
 //
@@ -101,10 +105,27 @@ module.exports = {
         if (type !== 'assistant/chunk') {
           log('事件 type=', type, 'surfaceOp=', event && event.surfaceOp, 'seq=', event && event.seq)
         }
-        // tool-call round: cancel pending announcement (that round's assistant
-        // text is process narration, not the final reply)
+        // tool-call round: a call to ask_user_question is a question to the
+        // user — keep the pending text so it gets announced (the user should
+        // hear the question); any other tool call cancels the pending
+        // announcement (that round's assistant text is process narration)
         if (type === 'tool/call') {
+          const toolName = event.data && event.data.name
+          if (toolName === 'ask_user_question') {
+            log('提问工具调用（ask_user_question）— 保留待播报文本')
+            return
+          }
           cancelPending()
+          return
+        }
+        // approval requested: announce it right away (time-sensitive), using
+        // the approval reason if present
+        if (type === 'approval/asked') {
+          cancelPending()
+          const reason = event.data && event.data.reason
+          const text = reason && reason.trim() ? reason : '需要你的审批，请查看界面。'
+          log('审批请求，播报:', text.slice(0, 60))
+          speak(text)
           return
         }
         if (!event || type !== 'assistant/message') return

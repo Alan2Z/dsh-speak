@@ -147,12 +147,14 @@ returns immediately. (Async spawning is safe here — the nested-spawn restricti
 
 ## 4. Event-flow truth table (DSH)
 
-| assistant round contains        | announced? |
-| ------------------------------- | ----------- |
-| final text reply, no tool call  | ✅ after throttle |
-| text + tool/call(s)             | ❌ (cancelled — narration) |
-| reasoning only, no text         | ❌ (no text block) |
-| streaming chunks                | ❌ (filtered) |
+| assistant round / event          | announced? |
+| -------------------------------- | ----------- |
+| final text reply, no tool call   | ✅ after throttle |
+| text + tool/call(s)              | ❌ (cancelled — narration) |
+| text + `ask_user_question` call  | ✅ the question text is kept and announced |
+| `approval/asked`                 | ✅ immediately (reason, else a fixed prompt) |
+| reasoning only, no text          | ❌ (no text block) |
+| streaming chunks                 | ❌ (filtered) |
 
 ## 5. Configuration reference
 
