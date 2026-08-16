@@ -66,6 +66,9 @@ harness event (DSH session event / Claude Code Stop hook / anything)
   final reply (skips reasoning/tool-call narration, merges multi-step messages).
 - **Gets your attention**: announces approval requests (hears "需要你的审批" when
   the agent is waiting on you) and questions the agent asks via `ask_user_question`.
+- **Bundle auto-registration** (1.3.0): declare the package in `dsh.profile.bundles`
+  and the plugin registers itself via the bundled `cordis.patch.yml` — no manual
+  patch entry needed.
 - **Best-effort**: never throws, never blocks the harness, never breaks a session.
 - **Natural voices**: Windows prefers natural voices — Windows 11 built-in packs,
   or voices registered via NaturalVoiceSAPIAdapter on Windows 10 (e.g. Xiaoxiao);
@@ -75,18 +78,6 @@ harness event (DSH session event / Claude Code Stop hook / anything)
   fail silently, and guards the adapter's per-utterance character ceiling.
 - **Portable engine**: any process can speak with one line:
   Windows `powershell -File speak.ps1 -Text "你好"` / macOS `./speak.sh -t "你好"`.
-
-- **Approval & question announcements** (1.4.0): approval requests are announced
-
-  immediately (the approval reason, or a default prompt), and `ask_user_question`
-
-  calls keep the pending text so the user hears the question.
-
-- **Bundle auto-registration** (1.3.0): declare the package in `dsh.profile.bundles`
-
-  and the plugin registers itself via the bundled `cordis.patch.yml` — no manual
-
-  patch entry needed.
 
 ## Prerequisites
 

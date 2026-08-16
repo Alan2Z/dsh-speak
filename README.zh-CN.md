@@ -62,6 +62,8 @@ harness 事件（DSH 会话事件 / Claude Code Stop hook / 任意方式）
   （跳过 reasoning/工具调用旁白，合并同一回复的多步消息）。
 - **提醒你**：审批请求（Agent 等你操作时会播"需要你的审批"）和 Agent 通过
   `ask_user_question` 提出的问题都会播报。
+- **Bundle 自动注册**（1.3.0）：把包声明进 `dsh.profile.bundles`，插件通过包内
+  自带的 `cordis.patch.yml` 自动注册，无需手动写 patch 条目。
 - **尽力而为**：绝不抛错、绝不阻塞 harness、绝不破坏会话。
 - **自然语音**：Windows 优先使用自然语音——Windows 11 内置语音包，或 Windows 10
   上经 NaturalVoiceSAPIAdapter 注册的语音（如晓晓）；macOS 使用系统朗读声音
@@ -70,14 +72,6 @@ harness 事件（DSH 会话事件 / Claude Code Stop hook / 任意方式）
   并守卫适配器单次朗读的字数上限。
 - **引擎可移植**：任意进程一行即可朗读：
   Windows `powershell -File speak.ps1 -Text "你好"` / macOS `./speak.sh -t "你好"`。
-
-- **审批与提问播报**（1.4.0）：审批请求到达立即播报（念出审批原因，无原因则念
-
-  固定提示语）；`ask_user_question` 提问会保留并播报待播报文本，用户能听到问题。
-
-- **Bundle 自动注册**（1.3.0）：把包声明进 `dsh.profile.bundles`，插件通过包内
-
-  自带的 `cordis.patch.yml` 自动注册，无需手动写 patch 条目。
 
 ## 前置条件
 
