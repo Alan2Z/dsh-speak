@@ -4,6 +4,8 @@
 
 ![鲸鱼娘大喇叭](鲸鱼娘大喇叭.png)
 
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
+
 Let your agent **tell you** when a long task is done — no more staring at the screen.
 
 dsh-speak reads the final assistant reply aloud through system speech synthesis —

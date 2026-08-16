@@ -2,6 +2,8 @@
 
 ![鲸鱼娘大喇叭](鲸鱼娘大喇叭.png)
 
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
+
 让 Agent 在长任务完成时**开口告诉你**——不用再盯着屏幕等。
 
 dsh-speak 通过系统语音合成把 Agent 的最终回复朗读出来——Windows 上优先使用自然
