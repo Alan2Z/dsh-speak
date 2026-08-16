@@ -58,6 +58,8 @@ harness 事件（DSH 会话事件 / Claude Code Stop hook / 任意方式）
 
 - **全自动**：DSH web 插件监听会话事件流，自动播报最终回复
   （跳过 reasoning/工具调用旁白，合并同一回复的多步消息）。
+- **提醒你**：审批请求（Agent 等你操作时会播"需要你的审批"）和 Agent 通过
+  `ask_user_question` 提出的问题都会播报。
 - **尽力而为**：绝不抛错、绝不阻塞 harness、绝不破坏会话。
 - **自然语音**：Windows 优先使用自然语音——Windows 11 内置语音包，或 Windows 10
   上经 NaturalVoiceSAPIAdapter 注册的语音（如晓晓）；macOS 使用系统朗读声音

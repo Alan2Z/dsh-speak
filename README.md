@@ -62,6 +62,8 @@ harness event (DSH session event / Claude Code Stop hook / anything)
 
 - **Automatic**: DSH web plugin watches the session event stream and announces the
   final reply (skips reasoning/tool-call narration, merges multi-step messages).
+- **Gets your attention**: announces approval requests (hears "需要你的审批" when
+  the agent is waiting on you) and questions the agent asks via `ask_user_question`.
 - **Best-effort**: never throws, never blocks the harness, never breaks a session.
 - **Natural voices**: Windows prefers natural voices — Windows 11 built-in packs,
   or voices registered via NaturalVoiceSAPIAdapter on Windows 10 (e.g. Xiaoxiao);
