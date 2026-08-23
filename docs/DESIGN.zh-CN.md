@@ -1,7 +1,6 @@
 # DESIGN.zh-CN.md — dsh-speak：为 AI 编程 harness 提供语音播报
 
-状态：**草稿** — 本文档描述当前（已验证的）本地实现与本文档仓库的目标通用结构，
-是 README 的参考依据。
+状态：**维护中** — 本文档描述当前实现与仓库结构，是 README 的参考依据。
 
 （英文版：docs/DESIGN.md）
 
@@ -111,6 +110,16 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
 - 触发时：把文本写入临时文件，`spawn` 出
   `powershell.exe -File <engine> -File <tmp>`，带 `windowsHide` + `stdio: 'ignore'`，
   绝不阻塞 harness；退出后删除临时文件。
+- **可选事件播报**（1.6.0，默认全关）：`turn/end`、`command/done`、
+  `goal/change`、`tool/result`（出错时）、`todo/write` 各自独立开关，触发时
+  立即播报固定短语（见 §5）。
+- **settings namespace 注册**（1.6.0）：插件在 apply 时调用
+  `installSettingsSection(ctx, 'dsh-speak', schema, patchConfig, hooks)`（来自
+  `@deepseek-ai/dsh-settings`，通过动态 `import()` 加载），把配置解析为
+  schema 默认 → patch `config` → UI 用户设置三层；`onChange` 时把解析值写回
+  内部可变 `cfg` 对象。浏览器端由 `client/client.js` 提供配置卡片。若宿主没有
+  settings 服务（dsh < 0.1.0-rc.7 或未挂载 provider），注册静默跳过，插件
+  完全按 patch `config` 工作——向后兼容。
 
 注册片段（`install.ps1` 也会自动完成）：
 
@@ -124,6 +133,21 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
 
 > Node 的 ESM 加载器不接受 Windows 绝对路径作为插件名——必须用
 > `file:///C:/...` URL 形式。
+
+### 3.4 DSH 浏览器端 — `client/client.js`
+
+一个 DSH client bundle（`window.__ModuleLoader__.load({ id: 'dsh-speak',
+factory })`），在「设置 → 插件 → 插件配置」里注册一张配置卡片：
+
+- 包通过 `package.json` 的 `dsh.client: { platform: 'web' }` +
+  `exports['./client']` 声明浏览器端；DSH 的 client-modules 扫描到后自动加载。
+- 卡片按 `settings.plugin.item` slot 注册，key 为 `dsh-speak`（与 host 端
+  namespace 一致）；只有 host 端注册了该 namespace 时 UI 才会显示它。
+- 卡片通过 client `settingsScope.bind({ namespace: 'dsh-speak' })` 读写配置：
+  显示解析值、标注"已覆盖"字段、保存时逐字段 `set`/`unset`。
+- **刻意手写、零构建**：只用平台 seed 模块（`react`、slots/locale/settingsScope
+  服务），不 import 官方包内部组件（client bundle-purity gate 禁止），与构建
+  出来的 bundle 契约一致。
 
 ### 3.3 Claude Code 适配层 — `adapters/claude-code/stop-hook.ps1`
 
@@ -142,6 +166,11 @@ Claude Code *确实*有 Stop hook。hook JSON（含 `transcript_path`）从 stdi
 | `approval/asked`（审批请求）     | ✅ 立即播报（审批原因，否则固定提示语） |
 | 只有 reasoning，无文本           | ❌（无 text 块） |
 | 流式分块                         | ❌（被过滤） |
+| `turn/end`（回合结束）           | 🟡 默认关；开则播报"第 N 轮对话完成/中断/异常结束" |
+| `command/done`（命令完成）       | 🟡 默认关；开则播报"命令执行完成/失败" |
+| `goal/change`（目标变更）        | 🟡 默认关；开则播报"已创建目标/目标已完成…（前 40 字）" |
+| `tool/result`（工具结果）        | 🟡 默认关；开则仅当带 `error` 时播报错误摘要 |
+| `todo/write`（待办更新）         | 🟡 默认关；开则播报"待办已更新：n/m 完成" |
 
 ## 5. 配置参考
 
@@ -157,7 +186,7 @@ Claude Code *确实*有 Stop hook。hook JSON（含 `transcript_path`）从 stdi
 | `-LongTextMessage` | `本次播报内容较长，请自行阅读。` | 超长文本时改念这句 |
 | `-LongTextMode` | `message` | `message`（固定提示语）\| `heading`（念最大字号 markdown 标题） |
 
-### DSH 插件（profile `config` —— 推荐）
+### DSH 插件（profile `config`；1.6.0 起同样可在 Web UI 的插件配置卡片里改）
 
 ```yaml
 config:
@@ -170,7 +199,16 @@ config:
   maxChars: 300
   volume: 50                 # 仅 Windows
   rate: 0                    # 0 = 引擎默认
+  # —— 可选事件播报（默认全关）——
+  announceTurnEnd: false     # turn/end
+  announceCommandDone: false # command/done
+  announceGoalChange: false  # goal/change
+  announceToolErrors: false  # tool/result 带 error 时
+  announceTodoWrite: false   # todo/write
 ```
+
+配置解析顺序：schema 默认值 → patch `config`（base）→ UI 用户设置（user 层）。
+浏览器端卡片（`client/client.js`）与 patch YAML 读写同一个 settings 文档。
 
 完整指南：docs/CUSTOMIZATION.zh-CN.md。
 
@@ -200,10 +238,9 @@ hook）、任意 shell harness（Agent 自己调 `speech-summary.ps1`）就是�
 
 ## 8. 项目定位
 
-本项目**刻意不是**一个持续迭代的产品。它记录了一条被验证过的、让 harness
-开口说话的实现路径：一个小引擎 + 两种可复用的适配范式（事件流 / Stop hook）。
-如果你需要更多（音色管理界面、更多后端、跨平台），把引擎当作接缝在其上扩展——
-本仓库保持为最小、自包含的参考实现。
+本项目保持**小而自包含**的设计：一个小引擎 + 两种可复用的适配范式（事件流 /
+Stop hook），并**持续维护**。需要更多能力（音色管理界面、更多后端、跨平台）时，
+把引擎当作接缝在其上扩展。
 
 ## 9. 发布为 npm 插件（附录）
 

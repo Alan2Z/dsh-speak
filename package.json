@@ -1,12 +1,19 @@
 {
   "name": "dsh-speak",
-  "version": "1.5.0",
-  "description": "Make your AI harness speak — verified voice announcements for DSH and other AI coding harnesses (Windows SAPI5 + macOS system voices)",
+  "version": "1.6.0",
+  "description": "Make your AI harness speak — voice announcements for DSH and other AI coding harnesses (Windows SAPI5 + macOS system voices)",
   "main": "adapters/dsh/speech-hook.js",
+  "exports": {
+    ".": "./adapters/dsh/speech-hook.js",
+    "./client": "./client/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
   "files": [
     "adapters/dsh/speech-hook.js",
     "adapters/dsh/install.ps1",
     "cordis.patch.yml",
+    "client/",
     "engine/",
     "docs/",
     "README.md",
@@ -16,6 +23,15 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
     }
   },
   "keywords": [
@@ -35,7 +51,7 @@
     "say"
   ],
   "scripts": {
-    "prepublishOnly": "node --check adapters/dsh/speech-hook.js"
+    "prepublishOnly": "node --check adapters/dsh/speech-hook.js && node --check client/client.js"
   },
   "engines": {
     "node": ">=18"
@@ -46,6 +62,18 @@
   },
   "author": "Alan2Z",
   "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/dsh-settings": "^0.1.0-rc.7",
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-settings": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
   "publishConfig": {
     "registry": "https://registry.npmjs.org"
   }

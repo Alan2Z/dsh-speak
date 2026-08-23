@@ -10,8 +10,13 @@ dsh-speak is deliberately small, but it exposes three levels of customization:
 
 ## 1. Configuration (recommended)
 
-Set options in the profile patch `config` block — visible in
-`dsh --dump-config`, per-profile, and never overwritten by npm:
+**Either way works, and they stay in sync** (both write the same settings
+document):
+
+1. **Web UI (1.6.0, recommended)**: Settings → Plugins → Plugin configuration →
+   the Voice announcements card. Every option is editable and saved there —
+   visible in `dsh --dump-config`, per-profile, and never overwritten by npm.
+2. **Profile patch `config` block** (equivalent):
 
 ```yaml
 # ~/.dsh/profiles/web/cordis.patch.yml
@@ -28,6 +33,12 @@ Set options in the profile patch `config` block — visible in
         maxChars: 300           # engine per-utterance ceiling
         volume: 50              # Windows only
         rate: 0                 # 0 = engine default (Windows SAPI scale / macOS wpm)
+        # —— optional event announcements (1.6.0, all off by default) ——
+        announceTurnEnd: false     # turn/end — "第 N 轮对话完成"
+        announceCommandDone: false # command/done — command finished/failed
+        announceGoalChange: false  # goal/change — goal created/updated/completed
+        announceToolErrors: false  # tool/result with error — error summary
+        announceTodoWrite: false   # todo/write — todo list updated
 ```
 
 ### Option reference
@@ -43,6 +54,15 @@ Set options in the profile patch `config` block — visible in
 | `maxChars` | `300` | engine per-utterance ceiling (SAPI/NVSAPIAdapter fails silently beyond ~375-470) |
 | `volume` | `50` | Windows only (0-100); macOS volume follows the system |
 | `rate` | `0` | `0` = engine default (Windows SAPI scale, e.g. 1; macOS words-per-minute, e.g. 175) |
+| `announceTurnEnd` | `false` | announce "第 N 轮对话完成/中断/异常结束" on turn end (`turn/end`) |
+| `announceCommandDone` | `false` | announce when a command finishes or fails (`command/done`) |
+| `announceGoalChange` | `false` | announce goal created/updated/completed/paused/resumed (`goal/change`, objective head) |
+| `announceToolErrors` | `false` | announce an error summary when a tool call returns an error (`tool/result` with `error`) |
+| `announceTodoWrite` | `false` | announce "待办已更新：n/m 完成" when the agent updates its todos (`todo/write`) |
+
+> Resolution order: schema default → patch `config` → UI user settings. Fields
+> edited in the UI carry an "Overridden" badge and can be reset to default;
+> fields written in YAML show up in the UI too.
 
 ### Long-text modes
 

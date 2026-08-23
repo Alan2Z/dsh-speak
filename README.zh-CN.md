@@ -1,5 +1,7 @@
 # dsh-speak 🔊 — 为 AI 编程 harness 提供语音播报
 
+**中文** · [English](README.md)
+
 ![鲸鱼娘大喇叭](鲸鱼娘大喇叭.png)
 
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
@@ -15,53 +17,17 @@ dsh-speak 通过系统语音合成把 Agent 的最终回复朗读出来——Win
 [DeepSeek Harness](https://github.com/deepseek-ai/dsh) 而生，但结构上
 任何 harness 都能接入。
 
-> **项目定位**：本项目只是为了给想让 harness 开口说话的用户提供一种**已经验证过的方案**；
-> 没有意外的话，后续不会再更新。
-
-## 三分钟安装 — DSH
-
-1. 把包装进你的 web profile（二选一）：
-
-   ```powershell
-   dsh plugin --profile web add dsh-speak
-   # 或（没有 pnpm 时）：
-   npm install --prefix "$env:USERPROFILE\.dsh\profiles\web" dsh-speak
-   ```
-
-   macOS 上（bash）：
-
-   ```bash
-   npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
-   ```
-
-2. 在 `~/.dsh/profiles/web/cordis.patch.yml` 末尾追加：
-
-   ```yaml
-   - insert:
-       - id: speech-hook
-         name: 'dsh-speak'
-   ```
-
-3. 重启 DSH web 应用——之后回复就会被朗读出来。
-
-> **想让 Agent 帮你装？** 把本仓库地址（`https://github.com/Alan2Z/dsh-speak`）
-> 丢给你的 DSH 会话，让它照着这份 README 安装即可——它读的就是你正在看的这份文档。
-> 只需要同意它对 `~/.dsh`（工作区外）的写入审批。
-
-```
-harness 事件（DSH 会话事件 / Claude Code Stop hook / 任意方式）
-      │
-      ▼  adapters/…  （harness 专属触发器：过滤、节流、取消）
-      ▼  engine/speak.ps1 / speak.sh  （与 harness 无关：清洗文本 → SAPI5 / say）
-      ▼  🔊 你听到最终回复
-```
-
 ## 特性
 
 - **全自动**：DSH web 插件监听会话事件流，自动播报最终回复
   （跳过 reasoning/工具调用旁白，合并同一回复的多步消息）。
 - **提醒你**：审批请求（Agent 等你操作时会播"需要你的审批"）和 Agent 通过
   `ask_user_question` 提出的问题都会播报。
+- **多事件可选播报**（1.6.0）：回合结束、命令完成、目标变更、工具出错、
+  待办更新等事件都可选播报，各自独立开/关（默认关）。
+- **可视化配置**（1.6.0）：设置 → 插件 → 插件配置 里出现 dsh-speak 卡片，
+  所有配置项（事件开关、节流、音量、语速…）可直接在 Web UI 修改保存，
+  无需手写 YAML。
 - **Bundle 自动注册**（1.3.0）：把包声明进 `dsh.profile.bundles`，插件通过包内
   自带的 `cordis.patch.yml` 自动注册，无需手动写 patch 条目。
 - **尽力而为**：绝不抛错、绝不阻塞 harness、绝不破坏会话。
@@ -73,9 +39,22 @@ harness 事件（DSH 会话事件 / Claude Code Stop hook / 任意方式）
 - **引擎可移植**：任意进程一行即可朗读：
   Windows `powershell -File speak.ps1 -Text "你好"` / macOS `./speak.sh -t "你好"`。
 
+## 工作原理
+
+```
+harness 事件（DSH 会话事件 / Claude Code Stop hook / 任意方式）
+      │
+      ▼  adapters/…  （harness 专属触发器：过滤、节流、取消）
+      ▼  engine/speak.ps1 / speak.sh  （与 harness 无关：清洗文本 → SAPI5 / say）
+      ▼  🔊 你听到最终回复
+```
+
+适配器负责把 harness 专属事件转成引擎调用；引擎负责清洗文本并朗读，
+与 harness 完全解耦。完整设计见 [docs/DESIGN.zh-CN.md](docs/DESIGN.zh-CN.md)。
+
 ## 前置条件
 
-Windows：
+### Windows
 
 - Windows 10 或 11，任意较新的 PowerShell。
 - 自然语音：
@@ -86,14 +65,14 @@ Windows：
     并用它的 VoiceDownloader 手动下载你需要的中文或其他语言的自然语音包。
 - 没有自然语音时，引擎回退到系统自带语音（如 Huihui）。
 
-macOS：
+### macOS 要求
 
 - macOS（Apple Silicon / Intel 均可），系统自带 `say` 命令，**无需安装任何软件**。
-- 中文音色见 [macOS](#macos) 一节（含 Siri 自然音色的选择入口与坑）。
+- 中文音色与 Siri 音色的选择入口/坑见 [macOS](#macos) 一节。
 
-## 快速开始 — DSH
+## 安装与快速开始
 
-### 方式 A — npm 插件（推荐）
+### DSH — 方式 A：npm 插件（推荐）
 
 ```powershell
 # 1. 把插件装进你的 web profile（会写入 ~/.dsh/profiles/web/package.json 的 dependencies）
@@ -113,10 +92,20 @@ dsh plugin --profile web add dsh-speak
 > ```powershell
 > npm install --prefix "$env:USERPROFILE\.dsh\profiles\web" dsh-speak
 > ```
+>
+> macOS（bash）：
+>
+> ```bash
+> npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
+> ```
 
 引擎随包分发（`node_modules/dsh-speak/engine/`），无需额外拷贝。
 
-### 方式 B — 文件安装（不需要 npm）
+> **想让 Agent 帮你装？** 把本仓库地址（`https://github.com/Alan2Z/dsh-speak`）
+> 丢给你的 DSH 会话，让它照着这份 README 安装即可——它读的就是你正在看的这份文档。
+> 只需要同意它对 `~/.dsh`（工作区外）的写入审批。
+
+### DSH — 方式 B：文件安装（不需要 npm）
 
 ```powershell
 # 1. 克隆
@@ -140,13 +129,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.dsh\hooks
 | `adapters/dsh/speech-hook.js` | `%USERPROFILE%\.dsh\profiles\web\plugins\` |
 | 注册条目 | 追加到 `%USERPROFILE%\.dsh\profiles\web\cordis.patch.yml`（先备份） |
 
-## macOS
+### macOS
 
 同一套适配层原生支持 macOS——插件自动检测平台，改调 `engine/speak.sh`
 （系统自带的 `say` 命令）而不是 `speak.ps1`。**自 1.2.0 起 macOS 引擎随 npm 包
 正式分发**，无需安装任何额外软件。
-
-### 安装（npm 方式，与 Windows 等价）
 
 ```bash
 # 1. 装进你的 web profile（没有 pnpm 也能装——dsh plugin 才依赖 pnpm）
@@ -163,7 +150,7 @@ npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
 
 > 装过 pnpm 也可以 `dsh plugin --profile web add dsh-speak`，效果相同。
 
-### 音色（重要，有两个坑）
+#### 音色（重要，有两个坑）
 
 - 默认跟随**系统朗读声音**（系统设置 → 辅助功能 → 朗读内容 → 系统朗读声音）。
   **macOS 26** 上该选择框旁有个 **ⓘ 圆圈图标**，点开才是完整音色列表——普通
@@ -178,7 +165,7 @@ npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
 - 想强制指定音色用 `-v Eddy|Flo|Tingting`（`say -v '?'` 列出可用音色）。
 - `say` 没有音量参数——音量跟随系统输出音量。
 
-### 单独测试引擎（不装 DSH 也行）
+#### 单独测试引擎（不装 DSH 也行）
 
 ```bash
 curl -sfL -o ~/speak.sh "https://cdn.jsdelivr.net/gh/Alan2Z/dsh-speak@main/engine/speak.sh"
@@ -187,7 +174,7 @@ chmod +x ~/speak.sh
 ~/speak.sh -t "测试" -v Eddy -r 200              # 指定音色 + 语速
 ```
 
-## 快速开始 — Claude Code
+### Claude Code
 
 在 `~/.claude/settings.json` 注册 Stop hook：
 
@@ -208,7 +195,7 @@ chmod +x ~/speak.sh
 }
 ```
 
-## 快速开始 — 其他任何 harness
+### 其他任何 harness
 
 直接从你的 Agent / 包装脚本 / 工具里调用引擎：
 
@@ -225,13 +212,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File engine\speech-prompt.ps1 -Te
 
 ## 配置
 
-引擎参数（详见 [docs/DESIGN.zh-CN.md](docs/DESIGN.zh-CN.md#5-配置参考)）：
+### 引擎参数
+
+详见 [docs/DESIGN.zh-CN.md §5 配置参考](docs/DESIGN.zh-CN.md#5-配置参考)：
 
 ```powershell
 speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次播报内容较长，请自行阅读。"
 ```
 
-DSH 插件配置——**优先用 profile patch 的 `config` 块**（`dsh --dump-config` 可见、按 profile 隔离、升级不丢）：
+### DSH 插件配置
+
+**两种改法，任选其一**（改 UI 或改 YAML 都写进同一个 settings 文档，彼此同步）：
+
+1. **Web UI（1.6.0，推荐）**：设置 → 插件 → 插件配置 → 语音播报 卡片。所有
+   配置项都能直接改并保存（`dsh --dump-config` 可见、按 profile 隔离、升级不丢）。
+2. **profile patch 的 `config` 块**（等效）：
 
 ```yaml
 # ~/.dsh/profiles/web/cordis.patch.yml
@@ -248,9 +243,18 @@ DSH 插件配置——**优先用 profile patch 的 `config` 块**（`dsh --dump
         maxChars: 300           # 引擎单次朗读字数上限
         volume: 50              # 仅 Windows
         rate: 0                 # 0 = 引擎默认（Windows SAPI 刻度 / macOS wpm）
+        # —— 可选事件播报（1.6.0，默认全关）——
+        announceTurnEnd: false     # 回合结束（"第 N 轮对话完成"）
+        announceCommandDone: false # 命令完成/失败（command/done）
+        announceGoalChange: false  # 目标创建/更新/完成（goal/change）
+        announceToolErrors: false  # 工具调用出错时播报摘要（tool/result）
+        announceTodoWrite: false   # 待办列表更新（todo/write）
 ```
 
-完整自定义指南见 [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.zh-CN.md)。
+> 解析顺序：schema 默认值 → patch `config` → UI 用户设置。UI 里改过的字段
+> 显示"已覆盖"徽标，可一键恢复默认；写进 YAML 的字段同样出现在 UI 中。
+
+完整自定义指南见 [docs/CUSTOMIZATION.zh-CN.md](docs/CUSTOMIZATION.zh-CN.md)。
 
 ## 自定义（升级不丢）
 
@@ -304,10 +308,12 @@ engine/                  与 harness 无关的语音引擎（PowerShell + SAPI5 
   speech-summary.ps1     阻塞式回复总结播报
 adapters/
   dsh/                   DSH web 插件 + 一键安装脚本
-    speech-hook.js       会话事件触发器（节流 + 工具调用取消）
+    speech-hook.js       会话事件触发器（节流 + 工具调用取消 + 可选事件播报 + settings 注册）
     install.ps1          拷贝 + 注册 + 备份
   claude-code/
     stop-hook.ps1        Claude Code Stop hook 触发器
+client/
+  client.js              DSH 浏览器端 bundle：插件配置卡片（设置 → 插件 → 插件配置）
 docs/
   DESIGN.zh-CN.md        完整设计文档：设计取舍、踩坑记录、扩展指南
 ```

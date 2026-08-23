@@ -9,8 +9,12 @@ dsh-speak 刻意保持小巧，但提供三层自定义：**配置**（不改代
 
 ## 一、配置（推荐）
 
-在 profile patch 的 `config` 块里设置——`dsh --dump-config` 可见、按 profile 隔离、
-npm 更新永不覆盖：
+**两种改法，任选其一**（都写进同一个 settings 文档，彼此同步）：
+
+1. **Web UI（1.6.0，推荐）**：设置 → 插件 → 插件配置 → 语音播报 卡片，所有
+   配置项可直接修改保存。`dsh --dump-config` 可见、按 profile 隔离、npm 更新
+   永不覆盖。
+2. **profile patch 的 `config` 块**（等效）：
 
 ```yaml
 # ~/.dsh/profiles/web/cordis.patch.yml
@@ -27,6 +31,12 @@ npm 更新永不覆盖：
         maxChars: 300           # 引擎单次朗读字数上限
         volume: 50              # 仅 Windows
         rate: 0                 # 0 = 引擎默认（Windows SAPI 刻度 / macOS wpm）
+        # —— 可选事件播报（1.6.0，默认全关）——
+        announceTurnEnd: false     # 回合结束（"第 N 轮对话完成"）
+        announceCommandDone: false # 命令完成/失败（command/done）
+        announceGoalChange: false  # 目标创建/更新/完成（goal/change）
+        announceToolErrors: false  # 工具调用出错时播报摘要（tool/result）
+        announceTodoWrite: false   # 待办列表更新（todo/write）
 ```
 
 ### 选项说明
@@ -42,6 +52,14 @@ npm 更新永不覆盖：
 | `maxChars` | `300` | 引擎单次朗读上限（SAPI/NVSAPIAdapter 超过约 375-470 字会静默失败） |
 | `volume` | `50` | 仅 Windows（0-100）；macOS 音量跟随系统 |
 | `rate` | `0` | `0` = 引擎默认（Windows SAPI 刻度如 1；macOS words-per-minute 如 175） |
+| `announceTurnEnd` | `false` | 回合结束时播报"第 N 轮对话完成/中断/异常结束"（`turn/end`） |
+| `announceCommandDone` | `false` | 命令执行完成/失败时播报（`command/done`） |
+| `announceGoalChange` | `false` | 目标创建/更新/完成/暂停/恢复时播报（`goal/change`，含目标标题前 40 字） |
+| `announceToolErrors` | `false` | 工具调用返回错误时播报错误摘要（`tool/result` 带 `error` 时） |
+| `announceTodoWrite` | `false` | agent 更新待办列表时播报"待办已更新：n/m 完成"（`todo/write`） |
+
+> 解析顺序：schema 默认值 → patch `config` → UI 用户设置。UI 里改过的字段
+> 显示"已覆盖"徽标，可一键恢复默认；写进 YAML 的字段同样出现在 UI 中。
 
 ### 超长文本模式
 

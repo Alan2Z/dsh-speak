@@ -2,9 +2,8 @@
 
 English · [中文](DESIGN.zh-CN.md)
 
-Status: **draft** — this document describes the current (proven) local implementation
-and the target generic structure of this repository. It is the reference for the
-README.
+Status: **maintained** — this document describes the current implementation and
+repository structure. It is the reference for the README.
 
 ---
 
@@ -122,6 +121,17 @@ no "reply finished" hook, so the plugin observes the session event stream:
 - on fire: writes the text to a temp file and `spawn`s
   `powershell.exe -File <engine> -File <tmp>` with `windowsHide` + `stdio: 'ignore'`
   so the harness is never blocked; the temp file is deleted on exit.
+- **Optional event announcements** (1.6.0, all off by default): `turn/end`,
+  `command/done`, `goal/change`, `tool/result` (on error), and `todo/write` each
+  have an independent toggle and announce a fixed phrase on fire (see §5).
+- **Settings namespace registration** (1.6.0): on apply the plugin calls
+  `installSettingsSection(ctx, 'dsh-speak', schema, patchConfig, hooks)` (from
+  `@deepseek-ai/dsh-settings`, loaded via dynamic `import()`), resolving config as
+  schema default → patch `config` → UI user layer; `onChange` writes the resolved
+  value back into the mutable internal `cfg` object. The browser half
+  (`client/client.js`) renders the configuration card. On hosts without a settings
+  service (dsh < 0.1.0-rc.7 or no provider mounted) the registration is skipped
+  silently and the plugin works purely from the patch config — backward compatible.
 
 Registration snippet (also automated by `install.ps1`):
 
@@ -135,6 +145,26 @@ Registration snippet (also automated by `install.ps1`):
 
 > Node's ESM loader does not accept Windows absolute paths as plugin names — the
 > `file:///C:/...` URL form is required.
+
+### 3.4 DSH browser half — `client/client.js`
+
+A DSH client bundle (`window.__ModuleLoader__.load({ id: 'dsh-speak', factory })`)
+that registers a configuration card under Settings → Plugins → Plugin
+configuration:
+
+- The package declares its browser half via `package.json`
+  `dsh.client: { platform: 'web' }` + `exports['./client']`; DSH's client-modules
+  scanner picks it up and loads it automatically.
+- The card registers into the `settings.plugin.item` slot keyed `dsh-speak`
+  (matching the Host-side namespace); the UI only shows it when the Host has
+  registered that namespace.
+- The card reads/writes config through the client `settingsScope.bind({
+  namespace: 'dsh-speak' })`: shows resolved values, marks "Overridden" fields,
+  and on save does per-field `set`/`unset`.
+- **Deliberately handwritten, zero build**: it only uses platform seed modules
+  (`react`, the slots/locale/settingsScope services) and imports no official
+  package internals (the client bundle-purity gate forbids that), matching the
+  built bundles' contract.
 
 ### 3.3 Claude Code adapter — `adapters/claude-code/stop-hook.ps1`
 
@@ -155,6 +185,11 @@ returns immediately. (Async spawning is safe here — the nested-spawn restricti
 | `approval/asked`                 | ✅ immediately (reason, else a fixed prompt) |
 | reasoning only, no text          | ❌ (no text block) |
 | streaming chunks                 | ❌ (filtered) |
+| `turn/end`                       | 🟡 off by default; announces "第 N 轮对话完成/中断/异常结束" |
+| `command/done`                   | 🟡 off by default; announces "命令执行完成/失败" |
+| `goal/change`                    | 🟡 off by default; announces "已创建目标/目标已完成…" (head) |
+| `tool/result`                    | 🟡 off by default; announces an error summary only when `error` is present |
+| `todo/write`                     | 🟡 off by default; announces "待办已更新：n/m 完成" |
 
 ## 5. Configuration reference
 
@@ -170,7 +205,7 @@ returns immediately. (Async spawning is safe here — the nested-spawn restricti
 | `-LongTextMessage`| `本次播报内容较长，请自行阅读。` | spoken instead of over-long text         |
 | `-LongTextMode`   | `message`                    | `message` (fixed prompt) \| `heading` (speak the largest markdown heading) |
 
-### DSH plugin (profile `config` — recommended; env vars are legacy fallbacks)
+### DSH plugin (profile `config`; since 1.6.0 also editable in the Web UI card)
 
 ```yaml
 config:
@@ -183,7 +218,17 @@ config:
   maxChars: 300
   volume: 50                 # Windows only
   rate: 0                    # 0 = engine default
+  # —— optional event announcements (off by default) ——
+  announceTurnEnd: false     # turn/end
+  announceCommandDone: false # command/done
+  announceGoalChange: false  # goal/change
+  announceToolErrors: false  # tool/result with error
+  announceTodoWrite: false   # todo/write
 ```
+
+Resolution order: schema default → patch `config` (base) → UI user layer. The
+browser card (`client/client.js`) and the patch YAML read/write the same settings
+document.
 
 Full guide: docs/CUSTOMIZATION.md.
 
@@ -214,11 +259,10 @@ by the agent) are the three reference patterns.
 
 ## 8. Scope
 
-This project is intentionally **not** a living product. It documents one proven way
-to give a harness a voice: a small engine + the two adapter patterns (event-stream
-and stop-hook) that worked. If you need more (voice management UI, more backends,
-cross-platform), treat the engine as the seam and build on top — this repository
-stays as a minimal, self-contained reference implementation.
+This repository stays **small and self-contained**: a small engine plus the two
+adapter patterns (event-stream and stop-hook), and it is **actively maintained**.
+If you need more (voice management UI, more backends, cross-platform), treat the
+engine as the seam and build on top.
 
 ## 9. Publishing as an npm plugin (appendix)
 

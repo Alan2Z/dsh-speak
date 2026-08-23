@@ -17,55 +17,19 @@ on macOS using the built-in `say` (can follow a Siri natural voice). It was buil
 for [DeepSeek Harness](https://github.com/deepseek-ai/dsh)
 and is structured so any harness can plug in.
 
-> **Project status**: this project exists only to provide an **already-verified
-> solution** for users who want their harness to speak. Barring unexpected
-> circumstances, it will not be updated further.
-
-## TL;DR — install for DSH
-
-1. Install the package into your web profile (pick one):
-
-   ```powershell
-   dsh plugin --profile web add dsh-speak
-   # or, without pnpm:
-   npm install --prefix "$env:USERPROFILE\.dsh\profiles\web" dsh-speak
-   ```
-
-   On macOS (bash):
-
-   ```bash
-   npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
-   ```
-
-2. Append to `~/.dsh/profiles/web/cordis.patch.yml`:
-
-   ```yaml
-   - insert:
-       - id: speech-hook
-         name: 'dsh-speak'
-   ```
-
-3. Restart the DSH web app — replies are now announced aloud.
-
-> **Let your agent do it?** Paste this repo URL
-> (`https://github.com/Alan2Z/dsh-speak`) into your DSH session and ask it to
-> install the plugin — your agent follows this very README. Approving the
-> out-of-workspace writes (`~/.dsh`) is all that's needed.
-
-```
-harness event (DSH session event / Claude Code Stop hook / anything)
-      │
-      ▼  adapters/…  (harness-specific trigger: filter, throttle, cancel)
-      ▼  engine/speak.ps1 / speak.sh  (harness-agnostic: clean text → SAPI5 / say)
-      ▼  🔊 you hear the final reply
-```
-
 ## Features
 
 - **Automatic**: DSH web plugin watches the session event stream and announces the
   final reply (skips reasoning/tool-call narration, merges multi-step messages).
 - **Gets your attention**: announces approval requests (hears "需要你的审批" when
   the agent is waiting on you) and questions the agent asks via `ask_user_question`.
+- **Optional event announcements** (1.6.0): turn end, command done, goal changes,
+  tool errors, and todo updates can each be announced, toggled independently
+  (off by default).
+- **Visual configuration** (1.6.0): a dsh-speak card appears under
+  Settings → Plugins → Plugin configuration — every option (event toggles,
+  throttle, volume, rate, …) is editable and saved from the Web UI, no
+  hand-edited YAML.
 - **Bundle auto-registration** (1.3.0): declare the package in `dsh.profile.bundles`
   and the plugin registers itself via the bundled `cordis.patch.yml` — no manual
   patch entry needed.
@@ -78,6 +42,20 @@ harness event (DSH session event / Claude Code Stop hook / anything)
   fail silently, and guards the adapter's per-utterance character ceiling.
 - **Portable engine**: any process can speak with one line:
   Windows `powershell -File speak.ps1 -Text "你好"` / macOS `./speak.sh -t "你好"`.
+
+## How it works
+
+```
+harness event (DSH session event / Claude Code Stop hook / anything)
+      │
+      ▼  adapters/…  (harness-specific trigger: filter, throttle, cancel)
+      ▼  engine/speak.ps1 / speak.sh  (harness-agnostic: clean text → SAPI5 / say)
+      ▼  🔊 you hear the final reply
+```
+
+The adapter turns harness-specific events into engine calls; the engine cleans the
+text and speaks it, fully decoupled from any harness. Full design:
+[docs/DESIGN.md](docs/DESIGN.md).
 
 ## Prerequisites
 
@@ -100,9 +78,9 @@ macOS:
 - Chinese voices: see the [macOS](#macos) section (incl. the Siri natural-voice
   picker and its pitfalls).
 
-## Quick start — DSH
+## Install & quick start
 
-### Option A — npm plugin (recommended)
+### DSH — Option A: npm plugin (recommended)
 
 ```powershell
 # 1. install the plugin into your web profile (adds dsh-speak to
@@ -124,11 +102,22 @@ dsh plugin --profile web add dsh-speak
 > ```powershell
 > npm install --prefix "$env:USERPROFILE\.dsh\profiles\web" dsh-speak
 > ```
+>
+> On macOS (bash):
+>
+> ```bash
+> npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
+> ```
 
 The engine ships inside the package (`node_modules/dsh-speak/engine/`), so no extra
 copying is needed.
 
-### Option B — file install (no npm needed)
+> **Let your agent do it?** Paste this repo URL
+> (`https://github.com/Alan2Z/dsh-speak`) into your DSH session and ask it to
+> install the plugin — your agent follows this very README. Approving the
+> out-of-workspace writes (`~/.dsh`) is all that's needed.
+
+### DSH — Option B: file install (no npm needed)
 
 ```powershell
 # 1. clone
@@ -152,13 +141,11 @@ What the file installer did:
 | `adapters/dsh/speech-hook.js` | `%USERPROFILE%\.dsh\profiles\web\plugins\` |
 | registration entry | appended to `%USERPROFILE%\.dsh\profiles\web\cordis.patch.yml` (backed up first) |
 
-## macOS
+### macOS
 
 The same adapter runs natively on macOS — the plugin auto-detects the platform and
 calls `engine/speak.sh` (the built-in `say` command) instead of `speak.ps1`.
 **Since 1.2.0 the macOS engine ships in the npm package** — no extra software.
-
-### Install (npm — same as Windows)
 
 ```bash
 # 1. install into your web profile (no pnpm needed — only `dsh plugin` requires it)
@@ -175,7 +162,7 @@ npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
 
 > With pnpm installed, `dsh plugin --profile web add dsh-speak` works identically.
 
-### Voices (important — two pitfalls)
+#### Voices (important — two pitfalls)
 
 - By default the engine follows the **system reading voice** (*Settings →
   Accessibility → Spoken Content → System Voice*). On **macOS 26** that picker has
@@ -194,7 +181,7 @@ npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
 - Use `-v Eddy|Flo|Tingting` to force a specific voice (`say -v '?'` lists them).
 - `say` has no volume flag — volume follows the system output volume.
 
-### Test the engine alone (no DSH needed)
+#### Test the engine alone (no DSH needed)
 
 ```bash
 curl -sfL -o ~/speak.sh "https://cdn.jsdelivr.net/gh/Alan2Z/dsh-speak@main/engine/speak.sh"
@@ -203,7 +190,7 @@ chmod +x ~/speak.sh
 ~/speak.sh -t "测试" -v Eddy -r 200              # explicit voice + rate
 ```
 
-## Quick start — Claude Code
+### Claude Code
 
 Register the Stop hook in `~/.claude/settings.json`:
 
@@ -224,7 +211,7 @@ Register the Stop hook in `~/.claude/settings.json`:
 }
 ```
 
-## Quick start — any other harness
+### Any other harness
 
 Call the engine directly from your agent / wrapper / script:
 
@@ -232,7 +219,7 @@ Call the engine directly from your agent / wrapper / script:
 # announce a one-liner
 powershell -NoProfile -ExecutionPolicy Bypass -File engine\speak.ps1 -Text "构建完成"
 
-# announce a long summary (from a file)
+# announce a long summary (blocking, returns when done)
 powershell -NoProfile -ExecutionPolicy Bypass -File engine\speech-summary.ps1 -Text "…"
 
 # ask for user attention (blocking, for prompts/approvals)
@@ -241,14 +228,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File engine\speech-prompt.ps1 -Te
 
 ## Configuration
 
-Engine parameters (see [docs/DESIGN.md](docs/DESIGN.md#5-configuration-reference)):
+### Engine parameters
+
+See [docs/DESIGN.md §5 configuration reference](docs/DESIGN.md#5-configuration-reference):
 
 ```powershell
 speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次播报内容较长，请自行阅读。"
 ```
 
-DSH plugin configuration — **prefer the profile patch `config` block** (visible in
-`dsh --dump-config`, per-profile, survives npm updates):
+### DSH plugin config
+
+**Either way works, and they stay in sync** (both write the same settings
+document):
+
+1. **Web UI (1.6.0, recommended)**: Settings → Plugins → Plugin configuration →
+   the Voice announcements card. Every option is editable and saved there
+   (visible in `dsh --dump-config`, per-profile, survives npm updates).
+2. **Profile patch `config` block** (equivalent):
 
 ```yaml
 # ~/.dsh/profiles/web/cordis.patch.yml
@@ -260,12 +256,22 @@ DSH plugin configuration — **prefer the profile patch `config` block** (visibl
         engine: ''              # engine path override; '' = auto-resolve
         announceApprovals: true # speak approval requests
         announceQuestions: true # speak ask_user_question content
-        stripApprovalPrefix: true  # strip the "escalate sandbox to ...: " prefix
+        stripApprovalPrefix: true  # strip "escalate sandbox to ...: " prefix
         longTextMode: message   # message | heading (speak largest md heading)
         maxChars: 300           # engine per-utterance ceiling
         volume: 50              # Windows only
         rate: 0                 # 0 = engine default (Windows SAPI scale / macOS wpm)
+        # —— optional event announcements (1.6.0, all off by default) ——
+        announceTurnEnd: false     # turn/end — "第 N 轮对话完成"
+        announceCommandDone: false # command/done — command finished/failed
+        announceGoalChange: false  # goal/change — goal created/updated/completed
+        announceToolErrors: false  # tool/result with error — error summary
+        announceTodoWrite: false   # todo/write — todo list updated
 ```
+
+> Resolution order: schema default → patch `config` → UI user settings. Fields
+> edited in the UI carry an "Overridden" badge and can be reset to default;
+> fields written in YAML show up in the UI too.
 
 See [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.md) for the full customization guide.
 
@@ -322,10 +328,12 @@ engine/                  harness-agnostic speech engine (PowerShell + SAPI5 / ba
   speech-summary.ps1     blocking reply-summary announcement
 adapters/
   dsh/                   DSH web plugin + one-command installer
-    speech-hook.js       session-event trigger (throttle + tool-call cancel)
+    speech-hook.js       session-event trigger (throttle + tool-call cancel + optional events + settings registration)
     install.ps1          copies + registers + backs up
   claude-code/
     stop-hook.ps1        Claude Code Stop hook trigger
+client/
+  client.js              DSH browser bundle: plugin configuration card (Settings → Plugins → Plugin configuration)
 docs/
   DESIGN.md              full design rationale, pitfalls, extension guide
 ```
