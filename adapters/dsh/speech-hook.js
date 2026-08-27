@@ -39,6 +39,7 @@
 //           rate: 0                 # 0 = engine default (Windows SAPI scale / macOS wpm)
 'use strict'
 const { spawn } = require('child_process')
+const { createRequire } = require('module')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -70,19 +71,55 @@ function resolveEngine(override) {
 module.exports = {
   apply(ctx, config) {
     config = config || {}
-    // resolved settings: config > default
-    const cfg = {
-      throttleMs: Number(config.throttleMs != null ? config.throttleMs : 1500) || 1500,
-      engine: resolveEngine(config.engine || ''),
-      announceApprovals: config.announceApprovals !== false,
-      announceQuestions: config.announceQuestions !== false,
-      stripApprovalPrefix: config.stripApprovalPrefix !== false,
-      longTextMode: config.longTextMode || 'message',
-      // macOS `say` handles long text; retain Windows' protective ceiling.
-      maxChars: Number(config.maxChars != null ? config.maxChars : (process.platform === 'darwin' ? 0 : 300)),
-      volume: Number(config.volume != null ? config.volume : 50) || 50,
-      rate: Number(config.rate != null ? config.rate : 0) || 0,
+    function resolveConfig(value) {
+      value = value || {}
+      return {
+        automaticSpeech: value.automaticSpeech !== false,
+        cleanMarkdownFormatting: value.cleanMarkdownFormatting !== false,
+        readInlineCode: value.readInlineCode !== false,
+        codeBlocks: ['all', 'smart', 'replace'].includes(value.codeBlocks) ? value.codeBlocks : 'smart',
+        codeBlockMaxChars: Number(value.codeBlockMaxChars != null ? value.codeBlockMaxChars : 300),
+        codeBlockReplacementText: String(value.codeBlockReplacementText || 'You can see the code in our history.'),
+        throttleMs: Number(value.throttleMs != null ? value.throttleMs : 1500) || 1500,
+        engine: resolveEngine(value.engine || ''),
+        announceApprovals: value.announceApprovals !== false,
+        announceQuestions: value.announceQuestions !== false,
+        stripApprovalPrefix: value.stripApprovalPrefix !== false,
+        longTextMode: value.longTextMode === 'heading' ? 'heading' : 'message',
+        maxChars: Number(value.maxChars != null ? value.maxChars : (process.platform === 'darwin' ? 0 : 300)),
+        volume: Number(value.volume != null ? value.volume : 50) || 50,
+        rate: Number(value.rate != null ? value.rate : 0) || 0,
+      }
     }
+    let cfg = resolveConfig(config)
+    // Cordis loads entries in parallel. Defer CJS-to-ESM settings imports until
+    // after that pass so Node 22 never requires a still-linking ESM dependency.
+    ctx.inject(['timer'], (timerCtx) => {
+      timerCtx.timer.timeout(() => {
+        try {
+          const profileRequire = createRequire(ctx.baseUrl || __filename)
+          const z = profileRequire('@deepseek-ai/schemastery')
+          const { installSettingsSection, settingsNamespace } = profileRequire('@deepseek-ai/dsh-settings')
+          const schema = z.object({
+            automaticSpeech: z.boolean().default(true), cleanMarkdownFormatting: z.boolean().default(true),
+            readInlineCode: z.boolean().default(true), codeBlocks: z.union(['all', 'smart', 'replace']).default('smart'),
+            codeBlockMaxChars: z.natural().default(300),
+            codeBlockReplacementText: z.string().default('You can see the code in our history.'),
+            maxChars: z.natural().default(process.platform === 'darwin' ? 0 : 300),
+            longTextMode: z.union(['message', 'heading']).default('message'),
+            announceApprovals: z.boolean().default(true), announceQuestions: z.boolean().default(true),
+            throttleMs: z.natural().default(1500), engine: z.string().default(''),
+            stripApprovalPrefix: z.boolean().default(true), volume: z.natural().default(50), rate: z.number().default(0),
+          })
+          installSettingsSection(ctx, settingsNamespace('dsh-speak'), schema, config, {
+            setSource: source => { cfg = resolveConfig(source()) },
+            onChange: () => { log('dsh-speak settings updated') },
+          })
+        } catch (e) {
+          log('settings registration failed:', e.message)
+        }
+      }, 0)
+    })
     log('plugin apply 执行（加载成功）; engine=', cfg.engine, '; throttle=', cfg.throttleMs,
       '; longTextMode=', cfg.longTextMode, '; maxChars=', cfg.maxChars)
 
@@ -137,7 +174,14 @@ module.exports = {
       if (process.platform === 'darwin') {
         // macOS: run the existing say-based engine through bash. A detached
         // process group lets cancellation terminate bash and its `say` child.
-        const args = ['-f', tmp, '-m', String(cfg.maxChars), '-M', cfg.longTextMode]
+        const args = [
+          '-f', tmp, '-m', String(cfg.maxChars), '-M', cfg.longTextMode,
+          '-C', cfg.cleanMarkdownFormatting ? '1' : '0',
+          '-I', cfg.readInlineCode ? '1' : '0',
+          '-B', cfg.codeBlocks,
+          '-K', String(cfg.codeBlockMaxChars),
+          '-R', cfg.codeBlockReplacementText,
+        ]
         if (cfg.rate > 0) args.push('-r', String(cfg.rate))
         ps = spawn('/bin/bash', [cfg.engine].concat(args), { detached: true, stdio: 'ignore' })
         log('spawn bash (macOS engine) 已发起:', args.join(' '))
@@ -148,7 +192,12 @@ module.exports = {
             '-Volume', String(cfg.volume),
             '-Rate', String(cfg.rate > 0 ? cfg.rate : 1),
             '-MaxChars', String(cfg.maxChars),
-            '-LongTextMode', cfg.longTextMode],
+            '-LongTextMode', cfg.longTextMode,
+            '-CleanMarkdownFormatting', String(cfg.cleanMarkdownFormatting),
+            '-ReadInlineCode', String(cfg.readInlineCode),
+            '-CodeBlocks', cfg.codeBlocks,
+            '-CodeBlockMaxChars', String(cfg.codeBlockMaxChars),
+            '-CodeBlockReplacementText', cfg.codeBlockReplacementText],
           { windowsHide: true, stdio: 'ignore' })
         log('spawn powershell 已发起')
       }
@@ -281,7 +330,7 @@ module.exports = {
           speak(text)
           return
         }
-        if (!event || type !== 'assistant/message') return
+        if (!event || type !== 'assistant/message' || !cfg.automaticSpeech) return
         if (event.surfaceOp && event.surfaceOp !== 'append') return
         // the message object lives at event.data.message (event.data wraps { turn, step, message })
         const msg = event.data && (event.data.message || event.data)

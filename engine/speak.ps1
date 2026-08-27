@@ -31,7 +31,13 @@ param(
     [int]$MaxChars = 300,
     [string]$LongTextMessage = '本次播报内容较长，请自行阅读。',
     [ValidateSet('message', 'heading')]
-    [string]$LongTextMode = 'message'
+    [string]$LongTextMode = 'message',
+    [bool]$CleanMarkdownFormatting = $true,
+    [bool]$ReadInlineCode = $true,
+    [ValidateSet('all', 'smart', 'replace')]
+    [string]$CodeBlocks = 'smart',
+    [int]$CodeBlockMaxChars = 300,
+    [string]$CodeBlockReplacementText = 'You can see the code in our history.'
 )
 
 # ---------- input: pick text source ----------
@@ -66,16 +72,23 @@ if ($text.Length -gt $MaxChars -and $LongTextMode -eq 'heading') {
     if ($candidate) { $text = $candidate }
 }
 
-# ---------- clean: markdown -> plain speech text ----------
-# code blocks, inline code, markdown links, bare URLs, emphasis/marker chars
-$text = $text -replace '```[\s\S]*?```', ' '
-$text = $text -replace '`[^`]*`', ' '
-$text = $text -replace '\[([^\]]*)\]\([^\)]*\)', '$1'
-$text = $text -replace 'https?://\S+', ' '
-$text = $text -replace '[-#*_~|>+]+', ' '
-# emoji / special symbols (Speak() fails silently on them): keep CJK, CJK punct,
-# full-width ranges, ASCII printable
-$text = [regex]::Replace($text, '[^一-龥　-〿＀-￯ -⁯ -~]', '')
+# ---------- clean: Markdown -> natural speech text ----------
+if ($CleanMarkdownFormatting) {
+    $text = [regex]::Replace($text, '```[^\n]*\n?([\s\S]*?)```', {
+        param($match)
+        $code = $match.Groups[1].Value
+        if ($CodeBlocks -eq 'all' -or ($CodeBlocks -eq 'smart' -and $code.Length -le $CodeBlockMaxChars)) { return " $code " }
+        return " $CodeBlockReplacementText "
+    })
+    if ($ReadInlineCode) { $text = $text -replace '`([^`]*)`', '$1' } else { $text = $text -replace '`[^`]*`', ' ' }
+    $text = $text -replace '\[([^\]]*)\]\([^\)]*\)', '$1'
+    $text = $text -replace 'https?://\S+', ' '
+    $text = $text -replace '(?m)^\s{0,3}(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s?)', ' '
+    $text = $text -replace '(\*\*|__|~~)(.*?)\1', '$2'
+    $text = $text -replace '[*_~]+', ''
+}
+# Keep all Unicode letters, including Portuguese accents; remove unsafe symbols.
+$text = [regex]::Replace($text, '[^\p{L}\p{N}一-龥　-〿＀-￯ -⁯ -~]', '')
 $text = $text -replace '\s+', ' '
 $text = $text.Trim()
 
