@@ -204,7 +204,8 @@ module.exports = {
         log('spawn powershell 已发起')
       }
       const token = ++speechToken
-      activeSpeech = { process: ps, tmp, token, messageId: messageId || null }
+      activeSpeech = { process: ps, tmp, token, messageId: messageId == null ? null : String(messageId) }
+      log('fala ativa associada à mensagem:', activeSpeech.messageId || '(sem id)')
       const settle = (kind, detail) => {
         log('播报进程', kind, detail || '')
         removeTemp(tmp)
@@ -351,7 +352,11 @@ module.exports = {
         if (!text.trim()) return
         log('缓存待播报文本长度:', text.length, '前 60:', text.slice(0, 60))
         pendingText = text
-        pendingMessageId = typeof msg.id === 'string' ? msg.id : null
+        // Different session-event projections expose the same message identity
+        // as `id` or `messageId`; preserve whichever scalar is present so the
+        // corresponding message action can show Stop during automatic speech.
+        const eventMessageId = msg.id != null ? msg.id : (msg.messageId != null ? msg.messageId : event.data && event.data.messageId)
+        pendingMessageId = eventMessageId == null ? null : String(eventMessageId)
         if (timer) clearTimeout(timer)
         // throttle: merge multi-step messages of one reply; a tool/call in
         // between cancels the announcement

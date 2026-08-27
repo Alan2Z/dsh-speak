@@ -6,7 +6,7 @@ window.__ModuleLoader__.load({
   factory: (require) => {
     const module = { exports: {} }
     const React = require('react')
-    const { Button, DisclosureRow, Input } = require('@deepseek-ai/dsh-client-ui-primitives')
+    const { Button, DisclosureRow, IconPauseOutline16, Input } = require('@deepseek-ai/dsh-client-ui-primitives')
     const CONTROL_PATH = '/dsh-speak/control'
     const SETTINGS_NAMESPACE = 'dsh-speak'
 
@@ -16,6 +16,13 @@ window.__ModuleLoader__.load({
       const listeners = new Set()
       const settings = ctx.settingsScope.bind({ namespace: SETTINGS_NAMESPACE })
       const e = React.createElement
+      function IconVolume2({ size = 20, className }) {
+        return e('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', className, 'aria-hidden': 'true' },
+          e('path', { d: 'M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z' }),
+          e('path', { d: 'M16 9a5 5 0 0 1 0 6' }),
+          e('path', { d: 'M19.364 18.364a9 9 0 0 0 0-12.728' }),
+        )
+      }
 
       function publish(messageId) {
         currentMessageId = typeof messageId === 'string' ? messageId : null
@@ -25,12 +32,17 @@ window.__ModuleLoader__.load({
         const response = await fetch(CONTROL_PATH, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
         if (!response.ok) throw new Error(`dsh-speak control failed (${response.status})`)
         const state = await response.json()
-        publish(state && state.speaking ? state.messageId : null)
+        // Do not let a transient status response without an identity clear the
+        // active message; the next poll supplies the authoritative association.
+        if (state && state.speaking && state.messageId != null) publish(String(state.messageId))
+        else if (!state || !state.speaking) publish(null)
       }
+      // One shared status poll updates the small subscriber set below. The
+      // message actions never own independent polling loops.
       ctx.effect(() => {
         const refresh = () => { void control({ action: 'status' }).catch(() => {}) }
         refresh()
-        return ctx.interval(refresh, 500)
+        return ctx.interval(refresh, 250)
       }, 'dsh-speak speech status')
       function useSpeakingMessage() {
         const [messageId, setMessageId] = React.useState(currentMessageId)
@@ -38,7 +50,7 @@ window.__ModuleLoader__.load({
         return messageId
       }
       function SpeakAction(props) {
-        const messageId = props.messageId
+        const messageId = props.messageId == null ? null : String(props.messageId)
         const text = props.useSession(snapshot => {
           for (const node of snapshot.nodes) if (node.kind === 'assistant' && node.messageId === messageId) {
             return node.blocks.filter(block => block && block.kind === 'text' && typeof block.text === 'string').map(block => block.text).join('')
@@ -52,7 +64,7 @@ window.__ModuleLoader__.load({
           type: 'button', className: 'dsh-speak-message-action', 'aria-label': label, 'aria-pressed': speaking,
           'data-speaking': speaking || undefined, title: label, disabled: pending || !text.trim(),
           onClick: () => { if (!pending && text.trim()) { setPending(true); void control({ action: 'toggle', messageId, text }).catch(console.error).finally(() => setPending(false)) } },
-        }, speaking ? '■' : '🔊')
+        }, speaking ? e(IconPauseOutline16) : e(IconVolume2))
       }
       function useSettings() {
         const [snapshot, setSnapshot] = React.useState(settings.getSnapshot())
