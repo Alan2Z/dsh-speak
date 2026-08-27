@@ -8,6 +8,7 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const { Button, DisclosureRow, IconPauseOutline16, Input } = require('@deepseek-ai/dsh-client-ui-primitives')
     const CONTROL_PATH = '/dsh-speak/control'
+    const SOCKET_PATH = '/dsh-speak/ws'
     const SETTINGS_NAMESPACE = 'dsh-speak'
 
     module.exports.inject = ['slots', 'timer', 'settingsScope']
@@ -37,13 +38,18 @@ window.__ModuleLoader__.load({
         if (state && state.speaking && state.messageId != null) publish(String(state.messageId))
         else if (!state || !state.speaking) publish(null)
       }
-      // One shared status poll updates the small subscriber set below. The
-      // message actions never own independent polling loops.
       ctx.effect(() => {
-        const refresh = () => { void control({ action: 'status' }).catch(() => {}) }
-        refresh()
-        return ctx.interval(refresh, 250)
-      }, 'dsh-speak speech status')
+        const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:'
+        const socket = new WebSocket(`${scheme}//${location.host}${SOCKET_PATH}`)
+        socket.onmessage = event => {
+          try {
+            const state = JSON.parse(event.data)
+            if (state && state.type === 'speech-state') publish(state.speaking && state.messageId != null ? String(state.messageId) : null)
+          } catch (e) { console.error('[dsh-speak] invalid speech websocket state', e) }
+        }
+        socket.onerror = () => { console.warn('[dsh-speak] speech websocket disconnected') }
+        return () => { try { socket.close() } catch (e) { /* already closed */ } }
+      }, 'dsh-speak speech state websocket')
       function useSpeakingMessage() {
         const [messageId, setMessageId] = React.useState(currentMessageId)
         React.useEffect(() => { const update = () => setMessageId(currentMessageId); listeners.add(update); return () => listeners.delete(update) }, [])
@@ -51,15 +57,32 @@ window.__ModuleLoader__.load({
       }
       function SpeakAction(props) {
         const messageId = props.messageId == null ? null : String(props.messageId)
+        console.log('[dsh-speak] action render', { messageId, rawMessageId: props.messageId })
         const text = props.useSession(snapshot => {
+          console.log('[dsh-speak] snapshot for action', { messageId, nodeCount: snapshot.nodes.length, nodes: snapshot.nodes.map(node => ({ kind: node.kind, messageId: node.messageId, blockKinds: Array.isArray(node.blocks) ? node.blocks.map(block => block && block.kind) : [] })) })
           for (const node of snapshot.nodes) if (node.kind === 'assistant' && node.messageId === messageId) {
-            return node.blocks.filter(block => block && block.kind === 'text' && typeof block.text === 'string').map(block => block.text).join('')
+            const resolved = node.blocks.filter(block => block && block.kind === 'text' && typeof block.text === 'string').map(block => block.text).join('')
+            console.log('[dsh-speak] exact node text', { messageId, length: resolved.length, preview: resolved.slice(0, 100) })
+            return resolved
+          }
+          // Some projections expose the addressed message through the node's
+          // event payload rather than the flattened block list. Use only the
+          // matching message, never the last assistant node as a fallback.
+          for (const node of snapshot.nodes) {
+            const event = node && node.event
+            const message = event && event.type === 'assistant/message' && event.data && event.data.message
+            if (message && String(message.id) === messageId && Array.isArray(message.content)) {
+              const resolved = message.content.filter(block => block && block.type === 'text' && typeof block.text === 'string').map(block => block.text).join('')
+              console.log('[dsh-speak] event message text', { messageId, length: resolved.length, preview: resolved.slice(0, 100) })
+              return resolved
+            }
           }
           return ''
         })
         const speaking = useSpeakingMessage() === messageId
         const [pending, setPending] = React.useState(false)
         const label = speaking ? 'Stop speaking' : 'Speak message'
+        console.log('[dsh-speak] action state', { messageId, speaking, textLength: text.length, textPreview: text.slice(0, 100) })
         return e('button', {
           type: 'button', className: 'dsh-speak-message-action', 'aria-label': label, 'aria-pressed': speaking,
           'data-speaking': speaking || undefined, title: label, disabled: pending || !text.trim(),
@@ -116,6 +139,9 @@ window.__ModuleLoader__.load({
           e('h3', null, 'dsh-speak'),
           e('p', null, 'Speech preferences for automatic announcements and per-message replay.'),
           e(Toggle, { label: 'Automatic Speech', value: value.automaticSpeech !== false, disabled, onChange: next => set('automaticSpeech', next), hint: 'Speaks final assistant responses. Manual replay always remains available.' }),
+          value.automaticSpeech !== false ? e(Options, { label: 'Automatic Speech Starts In', value: value.automaticSpeechMode || 'background', disabled, onChange: next => set('automaticSpeechMode', next), hint: 'Background keeps speaking when the DSH window is closed.', options: [
+            { value: 'background', label: 'Background' }, { value: 'foreground', label: 'Foreground only' },
+          ] }) : null,
           e(Toggle, { label: 'Clean Markdown Formatting', value: clean, disabled, onChange: next => set('cleanMarkdownFormatting', next), hint: 'Converts Markdown into natural speech text.' }),
           e(MarkdownCleaning, { value, clean, disabled, set }),
           e(SettingInput, { label: 'Max Speech Characters', value: value.maxChars == null ? 0 : value.maxChars, numeric: true, disabled, onChange: next => { if (/^\d+$/.test(next)) set('maxChars', Number(next)) }, hint: '0 is unlimited on macOS; Windows keeps its safe default.' }),

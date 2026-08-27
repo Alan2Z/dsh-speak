@@ -40,6 +40,7 @@
 'use strict'
 const { spawn } = require('child_process')
 const { createRequire } = require('module')
+const { WebSocketServer, WebSocket } = require('ws')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -75,6 +76,7 @@ module.exports = {
       value = value || {}
       return {
         automaticSpeech: value.automaticSpeech !== false,
+        automaticSpeechMode: value.automaticSpeechMode === 'foreground' ? 'foreground' : 'background',
         cleanMarkdownFormatting: value.cleanMarkdownFormatting !== false,
         readInlineCode: value.readInlineCode !== false,
         codeBlocks: ['all', 'smart', 'replace'].includes(value.codeBlocks) ? value.codeBlocks : 'smart',
@@ -101,7 +103,7 @@ module.exports = {
           const z = profileRequire('@deepseek-ai/schemastery')
           const { installSettingsSection, settingsNamespace } = profileRequire('@deepseek-ai/dsh-settings')
           const schema = z.object({
-            automaticSpeech: z.boolean().default(true), cleanMarkdownFormatting: z.boolean().default(true),
+            automaticSpeech: z.boolean().default(true), automaticSpeechMode: z.union(['background', 'foreground']).default('background'), cleanMarkdownFormatting: z.boolean().default(true),
             readInlineCode: z.boolean().default(true), codeBlocks: z.union(['all', 'smart', 'replace']).default('smart'),
             codeBlockMaxChars: z.natural().default(300),
             codeBlockReplacementText: z.string().default('You can see the code in our history.'),
@@ -128,6 +130,20 @@ module.exports = {
     let pendingMessageId = null
     let activeSpeech = null
     let speechToken = 0
+    const speechSockets = new Set()
+    const speechWss = new WebSocketServer({ noServer: true })
+
+    function speechState() {
+      return { type: 'speech-state', speaking: activeSpeech !== null, messageId: activeSpeech ? activeSpeech.messageId : null }
+    }
+    function publishSpeechState() {
+      const payload = JSON.stringify(speechState())
+      for (const socket of speechSockets) {
+        if (socket.readyState === WebSocket.OPEN) {
+          try { socket.send(payload) } catch (e) { speechSockets.delete(socket) }
+        }
+      }
+    }
 
     /** cancel a pending announcement (called when a tool-call round arrives) */
     function cancelPending() {
@@ -145,6 +161,7 @@ module.exports = {
       const active = activeSpeech
       if (!active) return false
       activeSpeech = null
+      publishSpeechState()
       log('停止播报进程 pid=', active.process.pid)
       try {
         if (process.platform === 'darwin' && active.process.pid) {
@@ -206,10 +223,14 @@ module.exports = {
       const token = ++speechToken
       activeSpeech = { process: ps, tmp, token, messageId: messageId == null ? null : String(messageId) }
       log('fala ativa associada à mensagem:', activeSpeech.messageId || '(sem id)')
+      publishSpeechState()
       const settle = (kind, detail) => {
         log('播报进程', kind, detail || '')
         removeTemp(tmp)
-        if (activeSpeech && activeSpeech.token === token) activeSpeech = null
+        if (activeSpeech && activeSpeech.token === token) {
+          activeSpeech = null
+          publishSpeechState()
+        }
       }
       ps.on('exit', code => settle('退出 code=', code))
       ps.on('error', e => settle('error:', e.message))
@@ -223,6 +244,17 @@ module.exports = {
     // replay route appears whenever webServer is available, even when this row
     // activated before the Web transport finished starting.
     ctx.inject(['webServer'], (webCtx) => {
+      webCtx.effect(() => webCtx.webServer.registerUpgrade({
+        path: '/dsh-speak/ws',
+        handler: (req, socket, head) => {
+          speechWss.handleUpgrade(req, socket, head, client => {
+            speechSockets.add(client)
+            client.once('close', () => speechSockets.delete(client))
+            client.once('error', () => speechSockets.delete(client))
+            try { client.send(JSON.stringify(speechState())) } catch (e) { speechSockets.delete(client) }
+          })
+        },
+      }), 'dsh-speak speech-state websocket')
       webCtx.effect(() => webCtx.webServer.register({
         kind: 'exact',
         path: '/dsh-speak/control',
@@ -279,6 +311,11 @@ module.exports = {
     ctx.effect(() => () => {
       cancelPending()
       stopActive()
+      for (const socket of speechSockets) {
+        try { socket.close() } catch (e) { /* already closed */ }
+      }
+      speechSockets.clear()
+      try { speechWss.close() } catch (e) { /* already closed */ }
     }, 'dsh-speak speech cleanup')
 
     ctx.on('session/event', (session, event) => {
@@ -333,7 +370,8 @@ module.exports = {
           speak(text)
           return
         }
-        if (!event || type !== 'assistant/message' || !cfg.automaticSpeech) return
+        if (!event || type !== 'assistant/message' || !cfg.automaticSpeech || cfg.automaticSpeechMode !== 'background') return
+        log('assistant/message automático recebido:', { surfaceOp: event.surfaceOp, dataKeys: event.data && Object.keys(event.data), messageId: event.data && event.data.message && event.data.message.id, contentTypes: event.data && event.data.message && Array.isArray(event.data.message.content) ? event.data.message.content.map(block => block && block.type) : [] })
         if (event.surfaceOp && event.surfaceOp !== 'append') return
         // the message object lives at event.data.message (event.data wraps { turn, step, message })
         const msg = event.data && (event.data.message || event.data)

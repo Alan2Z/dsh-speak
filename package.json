@@ -53,6 +53,9 @@
   "scripts": {
     "prepublishOnly": "node --check adapters/dsh/speech-hook.js && node --check adapters/dsh/client.js"
   },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
   "engines": {
     "node": ">=18"
   },
