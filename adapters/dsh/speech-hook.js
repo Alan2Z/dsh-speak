@@ -125,6 +125,7 @@ module.exports = {
 
     let timer = null
     let pendingText = ''
+    let pendingMessageId = null
     let activeSpeech = null
     let speechToken = 0
 
@@ -132,6 +133,7 @@ module.exports = {
     function cancelPending() {
       if (timer) { clearTimeout(timer); timer = null }
       pendingText = ''
+      pendingMessageId = null
     }
 
     function removeTemp(tmp) {
@@ -349,12 +351,14 @@ module.exports = {
         if (!text.trim()) return
         log('缓存待播报文本长度:', text.length, '前 60:', text.slice(0, 60))
         pendingText = text
+        pendingMessageId = typeof msg.id === 'string' ? msg.id : null
         if (timer) clearTimeout(timer)
         // throttle: merge multi-step messages of one reply; a tool/call in
         // between cancels the announcement
         timer = setTimeout(() => {
-          speak(pendingText)
+          speak(pendingText, pendingMessageId)
           pendingText = ''
+          pendingMessageId = null
           timer = null
         }, cfg.throttleMs)
       } catch (e) {
