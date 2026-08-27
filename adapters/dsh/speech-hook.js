@@ -87,6 +87,8 @@ module.exports = {
 
     let timer = null
     let pendingText = ''
+    let activeSpeech = null
+    let speechToken = 0
 
     /** cancel a pending announcement (called when a tool-call round arrives) */
     function cancelPending() {
@@ -94,22 +96,49 @@ module.exports = {
       pendingText = ''
     }
 
-    function speak(text) {
+    function removeTemp(tmp) {
+      try { fs.unlinkSync(tmp) } catch (e) { /* already removed */ }
+    }
+
+    /** Stop only the process tree created by this plugin. */
+    function stopActive() {
+      const active = activeSpeech
+      if (!active) return false
+      activeSpeech = null
+      log('停止播报进程 pid=', active.process.pid)
+      try {
+        if (process.platform === 'darwin' && active.process.pid) {
+          // The engine and its foreground `say` child share this detached group.
+          process.kill(-active.process.pid, 'SIGTERM')
+        } else {
+          active.process.kill()
+        }
+      } catch (e) {
+        log('停止播报进程失败:', e.message)
+      }
+      removeTemp(active.tmp)
+      return true
+    }
+
+    /** Speak arbitrary text through the existing platform engine. */
+    function speak(text, messageId) {
       log('speak 调用, 文本长度:', text ? text.length : 0)
-      if (!text || !text.trim()) return
+      if (!text || !text.trim()) return false
+      stopActive()
       const tmp = path.join(os.tmpdir(), `dsh-speech-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`)
       try {
         fs.writeFileSync(tmp, text, 'utf8')
       } catch (e) {
         log('写临时文件失败:', e.message)
-        return
+        return false
       }
       let ps
       if (process.platform === 'darwin') {
-        // macOS: run the say-based engine through bash
+        // macOS: run the existing say-based engine through bash. A detached
+        // process group lets cancellation terminate bash and its `say` child.
         const args = ['-f', tmp, '-m', String(cfg.maxChars), '-M', cfg.longTextMode]
         if (cfg.rate > 0) args.push('-r', String(cfg.rate))
-        ps = spawn('/bin/bash', [cfg.engine].concat(args), { stdio: 'ignore' })
+        ps = spawn('/bin/bash', [cfg.engine].concat(args), { detached: true, stdio: 'ignore' })
         log('spawn bash (macOS engine) 已发起:', args.join(' '))
       } else {
         ps = spawn('powershell.exe',
@@ -122,9 +151,82 @@ module.exports = {
           { windowsHide: true, stdio: 'ignore' })
         log('spawn powershell 已发起')
       }
-      ps.on('exit', (code) => { log('播报进程退出 code=', code); try { fs.unlinkSync(tmp) } catch (e) { /* 清理 */ } })
-      ps.on('error', (e) => { log('播报进程 error:', e.message); try { fs.unlinkSync(tmp) } catch (e2) { /* 清理 */ } })
+      const token = ++speechToken
+      activeSpeech = { process: ps, tmp, token, messageId: messageId || null }
+      const settle = (kind, detail) => {
+        log('播报进程', kind, detail || '')
+        removeTemp(tmp)
+        if (activeSpeech && activeSpeech.token === token) activeSpeech = null
+      }
+      ps.on('exit', code => settle('退出 code=', code))
+      ps.on('error', e => settle('error:', e.message))
+      return true
     }
+
+    // The browser action talks to this small same-origin Host endpoint. The
+    // action sends the addressed message text; this adapter remains the sole
+    // owner of process construction, settings, cancellation, and cleanup.
+    // Keep automatic speech independent of the Web server lifecycle. The
+    // replay route appears whenever webServer is available, even when this row
+    // activated before the Web transport finished starting.
+    ctx.inject(['webServer'], (webCtx) => {
+      webCtx.effect(() => webCtx.webServer.register({
+        kind: 'exact',
+        path: '/dsh-speak/control',
+        handler: async (req, res) => {
+          const reply = (status, value) => {
+            res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
+            res.end(JSON.stringify(value))
+          }
+          if (req.method !== 'POST' || !String(req.headers['content-type'] || '').startsWith('application/json')) {
+            reply(405, { error: 'POST application/json required' })
+            return
+          }
+          try {
+            const chunks = []
+            let size = 0
+            for await (const chunk of req) {
+              size += chunk.length
+              if (size > 1024 * 1024) throw new Error('request too large')
+              chunks.push(chunk)
+            }
+            const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
+            if (body.action === 'status') {
+              reply(200, {
+                speaking: activeSpeech !== null,
+                messageId: activeSpeech && activeSpeech.messageId,
+              })
+              return
+            }
+            if (body.action !== 'toggle'
+              || typeof body.messageId !== 'string'
+              || typeof body.text !== 'string'
+              || !body.text.trim()) {
+              reply(400, { error: 'invalid control request' })
+              return
+            }
+            cancelPending()
+            if (activeSpeech && activeSpeech.messageId === body.messageId) {
+              stopActive()
+            } else {
+              speak(body.text, body.messageId)
+            }
+            reply(200, {
+              speaking: activeSpeech !== null,
+              messageId: activeSpeech && activeSpeech.messageId,
+            })
+          } catch (e) {
+            log('控制请求失败:', e.message)
+            reply(e.message === 'request too large' ? 413 : 400, { error: e.message })
+          }
+        },
+      }), 'dsh-speak replay control route')
+    })
+
+    ctx.effect(() => () => {
+      cancelPending()
+      stopActive()
+    }, 'dsh-speak speech cleanup')
 
     ctx.on('session/event', (session, event) => {
       try {

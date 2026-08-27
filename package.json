@@ -3,8 +3,14 @@
   "version": "1.5.0",
   "description": "Make your AI harness speak — verified voice announcements for DSH and other AI coding harnesses (Windows SAPI5 + macOS system voices)",
   "main": "adapters/dsh/speech-hook.js",
+  "exports": {
+    ".": "./adapters/dsh/speech-hook.js",
+    "./client": "./adapters/dsh/client.js",
+    "./package.json": "./package.json"
+  },
   "files": [
     "adapters/dsh/speech-hook.js",
+    "adapters/dsh/client.js",
     "adapters/dsh/install.ps1",
     "cordis.patch.yml",
     "engine/",
@@ -16,6 +22,12 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
     }
   },
   "keywords": [
@@ -35,7 +47,7 @@
     "say"
   ],
   "scripts": {
-    "prepublishOnly": "node --check adapters/dsh/speech-hook.js"
+    "prepublishOnly": "node --check adapters/dsh/speech-hook.js && node --check adapters/dsh/client.js"
   },
   "engines": {
     "node": ">=18"
