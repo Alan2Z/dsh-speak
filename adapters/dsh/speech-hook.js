@@ -343,7 +343,8 @@ module.exports = {
         if (typeof c === 'string') {
           text = c
         } else if (Array.isArray(c)) {
-          // only text blocks: reasoning / tool_use blocks are not announced
+          // Speak visible text even when the same assistant message also
+          // contains tool-call blocks. Tool-call-only messages remain silent.
           text = c
             .filter(b => b && b.type === 'text' && typeof b.text === 'string')
             .map(b => b.text)
@@ -351,7 +352,7 @@ module.exports = {
         }
         if (!text.trim()) return
         log('缓存待播报文本长度:', text.length, '前 60:', text.slice(0, 60))
-        pendingText = text
+        pendingText = pendingText ? `${pendingText}\n\n${text}` : text
         // Different session-event projections expose the same message identity
         // as `id` or `messageId`; preserve whichever scalar is present so the
         // corresponding message action can show Stop during automatic speech.
