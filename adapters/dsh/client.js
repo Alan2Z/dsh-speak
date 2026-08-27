@@ -1,9 +1,8 @@
 'use strict'
 
-// Browser half: assistant-message replay plus the native DSH plugin-settings card.
 window.__ModuleLoader__.load({
   id: 'dsh-speak',
-  factory: (require) => {
+  factory: require => {
     const module = { exports: {} }
     const React = require('react')
     const { Button, DisclosureRow, IconPauseOutline16, Input } = require('@deepseek-ai/dsh-client-ui-primitives')
@@ -13,80 +12,83 @@ window.__ModuleLoader__.load({
 
     module.exports.inject = ['slots', 'timer', 'settingsScope']
     module.exports.apply = function apply(ctx) {
-      let currentMessageId = null
+      let speechState = { speaking: false, sessionId: null, turn: null, messageId: null, source: null, queueLength: 0 }
       const listeners = new Set()
       const settings = ctx.settingsScope.bind({ namespace: SETTINGS_NAMESPACE })
       const e = React.createElement
       function IconVolume2({ size = 20, className }) {
         return e('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', className, 'aria-hidden': 'true' },
           e('path', { d: 'M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z' }),
-          e('path', { d: 'M16 9a5 5 0 0 1 0 6' }),
-          e('path', { d: 'M19.364 18.364a9 9 0 0 0 0-12.728' }),
+          e('path', { d: 'M16 9a5 5 0 0 1 0 6' }), e('path', { d: 'M19.364 18.364a9 9 0 0 0 0-12.728' }),
         )
       }
-
-      function publish(messageId) {
-        currentMessageId = typeof messageId === 'string' ? messageId : null
+      function publish(next) {
+        speechState = next && typeof next === 'object' ? next : { speaking: false, sessionId: null, turn: null, messageId: null, source: null, queueLength: 0 }
         for (const listener of listeners) listener()
       }
       async function control(payload) {
         const response = await fetch(CONTROL_PATH, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
         if (!response.ok) throw new Error(`dsh-speak control failed (${response.status})`)
         const state = await response.json()
-        // Do not let a transient status response without an identity clear the
-        // active message; the next poll supplies the authoritative association.
-        if (state && state.speaking && state.messageId != null) publish(String(state.messageId))
-        else if (!state || !state.speaking) publish(null)
+        if (state && state.type === 'speech-state') publish(state)
+        return state
       }
       ctx.effect(() => {
-        const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:'
-        const socket = new WebSocket(`${scheme}//${location.host}${SOCKET_PATH}`)
-        socket.onmessage = event => {
-          try {
-            const state = JSON.parse(event.data)
-            if (state && state.type === 'speech-state') publish(state.speaking && state.messageId != null ? String(state.messageId) : null)
-          } catch (e) { console.error('[dsh-speak] invalid speech websocket state', e) }
+        let socket = null
+        let retry = null
+        let disposed = false
+        const connect = () => {
+          if (disposed) return
+          const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:'
+          socket = new WebSocket(`${scheme}//${location.host}${SOCKET_PATH}`)
+          socket.onmessage = event => {
+            try {
+              const state = JSON.parse(event.data)
+              if (state && state.type === 'speech-state') publish(state)
+            } catch (e) { console.warn('[dsh-speak] ignored invalid speech websocket state') }
+          }
+          socket.onclose = () => {
+            if (!disposed) retry = ctx.timeout(connect, 1000)
+          }
+          socket.onerror = () => { try { socket.close() } catch (e) { /* closed */ } }
         }
-        socket.onerror = () => { console.warn('[dsh-speak] speech websocket disconnected') }
-        return () => { try { socket.close() } catch (e) { /* already closed */ } }
+        connect()
+        return () => {
+          disposed = true
+          if (retry) retry()
+          try { if (socket) socket.close() } catch (e) { /* closed */ }
+        }
       }, 'dsh-speak speech state websocket')
-      function useSpeakingMessage() {
-        const [messageId, setMessageId] = React.useState(currentMessageId)
-        React.useEffect(() => { const update = () => setMessageId(currentMessageId); listeners.add(update); return () => listeners.delete(update) }, [])
-        return messageId
+      function useSpeechState() {
+        const [snapshot, setSnapshot] = React.useState(speechState)
+        React.useEffect(() => { const update = () => setSnapshot(speechState); listeners.add(update); return () => listeners.delete(update) }, [])
+        return snapshot
+      }
+      function visibleText(node) {
+        return Array.isArray(node && node.blocks) ? node.blocks.filter(block => block && block.kind === 'text' && typeof block.text === 'string').map(block => block.text).join('') : ''
       }
       function SpeakAction(props) {
         const messageId = props.messageId == null ? null : String(props.messageId)
-        console.log('[dsh-speak] action render', { messageId, rawMessageId: props.messageId })
-        const text = props.useSession(snapshot => {
-          console.log('[dsh-speak] snapshot for action', { messageId, nodeCount: snapshot.nodes.length, nodes: snapshot.nodes.map(node => ({ kind: node.kind, messageId: node.messageId, blockKinds: Array.isArray(node.blocks) ? node.blocks.map(block => block && block.kind) : [] })) })
-          for (const node of snapshot.nodes) if (node.kind === 'assistant' && node.messageId === messageId) {
-            const resolved = node.blocks.filter(block => block && block.kind === 'text' && typeof block.text === 'string').map(block => block.text).join('')
-            console.log('[dsh-speak] exact node text', { messageId, length: resolved.length, preview: resolved.slice(0, 100) })
-            return resolved
-          }
-          // Some projections expose the addressed message through the node's
-          // event payload rather than the flattened block list. Use only the
-          // matching message, never the last assistant node as a fallback.
-          for (const node of snapshot.nodes) {
-            const event = node && node.event
-            const message = event && event.type === 'assistant/message' && event.data && event.data.message
-            if (message && String(message.id) === messageId && Array.isArray(message.content)) {
-              const resolved = message.content.filter(block => block && block.type === 'text' && typeof block.text === 'string').map(block => block.text).join('')
-              console.log('[dsh-speak] event message text', { messageId, length: resolved.length, preview: resolved.slice(0, 100) })
-              return resolved
-            }
-          }
-          return ''
+        const turnData = props.useSession(snapshot => {
+          const addressed = snapshot.nodes.find(node => node.kind === 'assistant' && String(node.messageId) === messageId)
+          if (!addressed || !Number.isFinite(addressed.turn)) return { turn: null, text: '' }
+          const nodes = snapshot.nodes.filter(node => node.kind === 'assistant' && node.turn === addressed.turn).slice().sort((a, b) => a.seq - b.seq)
+          return { turn: addressed.turn, text: nodes.map(visibleText).filter(Boolean).join('\n\n') }
         })
-        const speaking = useSpeakingMessage() === messageId
+        const active = useSpeechState()
+        const speaking = active.speaking && String(active.sessionId) === String(props.sessionId) && active.turn === turnData.turn
         const [pending, setPending] = React.useState(false)
-        const label = speaking ? 'Stop speaking' : 'Speak message'
-        console.log('[dsh-speak] action state', { messageId, speaking, textLength: text.length, textPreview: text.slice(0, 100) })
+        const label = speaking ? 'Stop speaking' : 'Speak turn'
         return e('button', {
           type: 'button', className: 'dsh-speak-message-action', 'aria-label': label, 'aria-pressed': speaking,
-          'data-speaking': speaking || undefined, title: label, disabled: pending || !text.trim(),
-          onClick: () => { if (!pending && text.trim()) { setPending(true); void control({ action: 'toggle', messageId, text }).catch(console.error).finally(() => setPending(false)) } },
+          'data-speaking': speaking || undefined, title: label, disabled: pending || !turnData.text.trim(),
+          onClick: () => {
+            if (pending) return
+            setPending(true)
+            const action = speaking ? 'stop' : 'play'
+            const payload = speaking ? { action } : { action, sessionId: props.sessionId, turn: turnData.turn, messageId, text: turnData.text }
+            void control(payload).catch(console.error).finally(() => setPending(false))
+          },
         }, speaking ? e(IconPauseOutline16) : e(IconVolume2))
       }
       function useSettings() {
@@ -95,74 +97,39 @@ window.__ModuleLoader__.load({
         return snapshot
       }
       function Field({ label, hint, children, inline }) {
-        return e('div', { className: 'dsh-speak-field' },
-          inline
-            ? e('div', { className: 'dsh-speak-inline-field' }, e('div', { className: 'dsh-speak-field-label' }, label), children)
-            : e('div', { className: 'dsh-speak-field-label' }, label),
-          inline ? null : children,
-          e('p', { className: 'dsh-speak-field-hint' }, hint),
-        )
+        return e('div', { className: 'dsh-speak-field' }, inline ? e('div', { className: 'dsh-speak-inline-field' }, e('div', { className: 'dsh-speak-field-label' }, label), children) : e('div', { className: 'dsh-speak-field-label' }, label), inline ? null : children, e('p', { className: 'dsh-speak-field-hint' }, hint))
       }
-      function Toggle({ label, value, disabled, onChange, hint }) {
-        return e(Field, { label: `${label}:`, hint, inline: true }, e('div', { className: 'dsh-speak-option-row' }, e(Button, { variant: 'outline', size: 'sm', disabled, 'aria-pressed': value, onClick: () => onChange(!value) }, value ? 'On' : 'Off')))
-      }
-      function SettingInput({ label, value, disabled, numeric, onChange, hint }) {
-        const id = `dsh-speak-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
-        return e(Field, { label: `${label}:`, hint }, e('div', { className: 'dsh-speak-input-row' }, e(Input, { id, value: String(value), disabled, inputMode: numeric ? 'numeric' : undefined, onChange: event => onChange(event.target.value) })))
-      }
-      function Options({ label, value, disabled, onChange, hint, options }) {
-        return e(Field, { label, hint }, e('div', { className: 'dsh-speak-option-row' }, ...options.map(option => e(Button, { key: option.value, variant: value === option.value ? 'primary' : 'outline', size: 'sm', disabled, 'aria-pressed': value === option.value, onClick: () => onChange(option.value) }, option.label))))
-      }
+      function Toggle({ label, value, disabled, onChange, hint }) { return e(Field, { label: `${label}:`, hint, inline: true }, e('div', { className: 'dsh-speak-option-row' }, e(Button, { variant: 'outline', size: 'sm', disabled, 'aria-pressed': value, onClick: () => onChange(!value) }, value ? 'On' : 'Off'))) }
+      function SettingInput({ label, value, disabled, numeric, onChange, hint }) { const id = `dsh-speak-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`; return e(Field, { label: `${label}:`, hint }, e('div', { className: 'dsh-speak-input-row' }, e(Input, { id, value: String(value), disabled, inputMode: numeric ? 'numeric' : undefined, onChange: event => onChange(event.target.value) }))) }
+      function Options({ label, value, disabled, onChange, hint, options }) { return e(Field, { label, hint }, e('div', { className: 'dsh-speak-option-row' }, ...options.map(option => e(Button, { key: option.value, variant: value === option.value ? 'primary' : 'outline', size: 'sm', disabled, 'aria-pressed': value === option.value, onClick: () => onChange(option.value) }, option.label)))) }
       function MarkdownCleaning({ value, clean, disabled, set }) {
-        const [open, setOpen] = React.useState(true)
-        const controlsDisabled = disabled || !clean
-        return e(DisclosureRow, {
-          icon: null, title: 'Markdown cleaning', open, expandable: true,
-          onToggle: () => setOpen(!open), expandOnRowClick: true,
-        }, e('div', { style: { paddingLeft: '22px' } },
+        const [open, setOpen] = React.useState(true); const controlsDisabled = disabled || !clean
+        return e(DisclosureRow, { icon: null, title: 'Markdown cleaning', open, expandable: true, onToggle: () => setOpen(!open), expandOnRowClick: true }, e('div', { style: { paddingLeft: '22px' } },
           e(Toggle, { label: 'Read Inline Code', value: value.readInlineCode !== false, disabled: controlsDisabled, onChange: next => set('readInlineCode', next), hint: 'Reads inline code without backtick markers.' }),
-          e(Options, { label: 'Code Blocks', value: value.codeBlocks || 'smart', disabled: controlsDisabled, onChange: next => set('codeBlocks', next), hint: 'Choose how fenced code blocks are spoken.', options: [
-            { value: 'all', label: 'Read all' }, { value: 'smart', label: 'Smart' }, { value: 'replace', label: 'Replace all' },
-          ] }),
+          e(Options, { label: 'Code Blocks', value: value.codeBlocks || 'smart', disabled: controlsDisabled, onChange: next => set('codeBlocks', next), hint: 'Choose how fenced code blocks are spoken.', options: [{ value: 'all', label: 'Read all' }, { value: 'smart', label: 'Smart' }, { value: 'replace', label: 'Replace all' }] }),
           e(SettingInput, { label: 'Code Block Max Characters', value: value.codeBlockMaxChars == null ? 300 : value.codeBlockMaxChars, numeric: true, disabled: controlsDisabled || value.codeBlocks !== 'smart', onChange: next => { if (/^\d+$/.test(next)) set('codeBlockMaxChars', Number(next)) }, hint: 'Only used by Smart code blocks.' }),
           e(SettingInput, { label: 'Code Block Replacement Text', value: value.codeBlockReplacementText || 'You can see the code in our history.', disabled: controlsDisabled || value.codeBlocks === 'all', onChange: next => set('codeBlockReplacementText', next), hint: 'Used when a code block is replaced.' }),
         ))
       }
       function SettingsCard() {
-        const snapshot = useSettings()
-        if (snapshot.status !== 'ready' || !snapshot.value) return null
-        const value = snapshot.value
-        const disabled = !snapshot.writable
-        const clean = value.cleanMarkdownFormatting !== false
-        const set = (field, next) => { void settings.set(field, next).catch(console.error) }
-        return e('section', { 'aria-label': 'Speak settings' },
-          e('h3', null, 'dsh-speak'),
-          e('p', null, 'Speech preferences for automatic announcements and per-message replay.'),
+        const snapshot = useSettings(); if (snapshot.status !== 'ready' || !snapshot.value) return null
+        const value = snapshot.value; const disabled = !snapshot.writable; const clean = value.cleanMarkdownFormatting !== false; const set = (field, next) => { void settings.set(field, next).catch(console.error) }
+        return e('section', { 'aria-label': 'Speak settings' }, e('h3', null, 'dsh-speak'), e('p', null, 'Speech preferences for automatic announcements and per-message replay.'),
           e(Toggle, { label: 'Automatic Speech', value: value.automaticSpeech !== false, disabled, onChange: next => set('automaticSpeech', next), hint: 'Speaks final assistant responses. Manual replay always remains available.' }),
-          value.automaticSpeech !== false ? e(Options, { label: 'Automatic Speech Starts In', value: value.automaticSpeechMode || 'background', disabled, onChange: next => set('automaticSpeechMode', next), hint: 'Background keeps speaking when the DSH window is closed.', options: [
-            { value: 'background', label: 'Background' }, { value: 'foreground', label: 'Foreground only' },
-          ] }) : null,
-          e(Toggle, { label: 'Clean Markdown Formatting', value: clean, disabled, onChange: next => set('cleanMarkdownFormatting', next), hint: 'Converts Markdown into natural speech text.' }),
-          e(MarkdownCleaning, { value, clean, disabled, set }),
+          value.automaticSpeech !== false ? e(Options, { label: 'Automatic Speech Starts In', value: value.automaticSpeechMode || 'background', disabled, onChange: next => set('automaticSpeechMode', next), hint: 'Background keeps speaking when the DSH window is closed.', options: [{ value: 'background', label: 'Background' }, { value: 'foreground', label: 'Foreground only' }] }) : null,
+          e(Toggle, { label: 'Clean Markdown Formatting', value: clean, disabled, onChange: next => set('cleanMarkdownFormatting', next), hint: 'Converts Markdown into natural speech text.' }), e(MarkdownCleaning, { value, clean, disabled, set }),
           e(SettingInput, { label: 'Max Speech Characters', value: value.maxChars == null ? 0 : value.maxChars, numeric: true, disabled, onChange: next => { if (/^\d+$/.test(next)) set('maxChars', Number(next)) }, hint: '0 is unlimited on macOS; Windows keeps its safe default.' }),
-          e(Options, { label: 'Long Text Behavior', value: value.longTextMode || 'message', disabled, onChange: next => set('longTextMode', next), hint: 'When a positive maximum is exceeded.', options: [
-            { value: 'message', label: 'Read replacement message' }, { value: 'heading', label: 'Read largest heading' },
-          ] }),
-          e(Toggle, { label: 'Announce Approvals', value: value.announceApprovals !== false, disabled, onChange: next => set('announceApprovals', next), hint: 'Announces approval requests.' }),
-          e(Toggle, { label: 'Announce Questions', value: value.announceQuestions !== false, disabled, onChange: next => set('announceQuestions', next), hint: 'Announces ask-user questions.' }),
+          e(Options, { label: 'Long Text Behavior', value: value.longTextMode || 'message', disabled, onChange: next => set('longTextMode', next), hint: 'When a positive maximum is exceeded.', options: [{ value: 'message', label: 'Read replacement message' }, { value: 'heading', label: 'Read largest heading' }] }),
+          e(Toggle, { label: 'Announce Approvals', value: value.announceApprovals !== false, disabled, onChange: next => set('announceApprovals', next), hint: 'Announces approval requests.' }), e(Toggle, { label: 'Announce Questions', value: value.announceQuestions !== false, disabled, onChange: next => set('announceQuestions', next), hint: 'Announces ask-user questions.' }),
         )
       }
-
       ctx.effect(() => {
-        const style = document.createElement('style')
-        style.dataset.plugin = 'dsh-speak'
+        const style = document.createElement('style'); style.dataset.plugin = 'dsh-speak'
         style.textContent = '.dsh-speak-message-action{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:5px;border:0;border-radius:28px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;font:inherit;font-size:14px;line-height:1}.dsh-speak-message-action:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.dsh-speak-message-action[data-speaking]{color:var(--dsw-alias-label-primary)}.dsh-speak-message-action:disabled{cursor:default;opacity:.4}.dsh-speak-field{display:flex;flex-direction:column;gap:8px;margin:0 0 20px}.dsh-speak-field-label{font-weight:600;color:var(--dsw-alias-label-primary)}.dsh-speak-inline-field{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dsh-speak-inline-field>.dsh-speak-field-label{flex:none}.dsh-speak-field-hint{margin:0;color:var(--dsw-alias-label-tertiary)}.dsh-speak-field+.dsh-speak-field{margin-top:20px}.dsh-speak-option-row{display:inline-flex;align-items:center;gap:8px;width:max-content;max-width:100%}.dsh-speak-input-row{display:flex;max-width:100%}.dsh-speak-input-row>span{max-width:100%}'
         document.head.appendChild(style); return () => style.remove()
       }, 'dsh-speak message action styles')
       ctx.slots.inject('conversation.chat.assistant-actions', () => ctx.slots.register({ name: 'conversation.chat.assistant-actions', id: 'speak', order: 5, label: 'Speak' }, SpeakAction))
-      ctx.slots.inject('settings.section', () => ctx.slots.register({
-        name: 'settings.section', id: 'speak', order: 25, label: 'Speak',
-      }, SettingsCard))
+      ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'speak', order: 25, label: 'Speak' }, SettingsCard))
     }
     return module.exports
   },
