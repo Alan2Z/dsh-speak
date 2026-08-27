@@ -27,7 +27,6 @@ module.exports = {
       value = value || {}
       return {
         automaticSpeech: value.automaticSpeech !== false,
-        automaticSpeechMode: value.automaticSpeechMode === 'foreground' ? 'foreground' : 'background',
         cleanMarkdownFormatting: value.cleanMarkdownFormatting !== false,
         readInlineCode: value.readInlineCode !== false,
         codeBlocks: ['all', 'smart', 'replace'].includes(value.codeBlocks) ? value.codeBlocks : 'smart',
@@ -53,7 +52,7 @@ module.exports = {
           const z = profileRequire('@deepseek-ai/schemastery')
           const { installSettingsSection, settingsNamespace } = profileRequire('@deepseek-ai/dsh-settings')
           const schema = z.object({
-            automaticSpeech: z.boolean().default(true), automaticSpeechMode: z.union(['background', 'foreground']).default('background'), cleanMarkdownFormatting: z.boolean().default(true),
+            automaticSpeech: z.boolean().default(true), cleanMarkdownFormatting: z.boolean().default(true),
             readInlineCode: z.boolean().default(true), codeBlocks: z.union(['all', 'smart', 'replace']).default('smart'),
             codeBlockMaxChars: z.natural().default(300), codeBlockReplacementText: z.string().default('You can see the code in our history.'),
             maxChars: z.natural().default(process.platform === 'darwin' ? 0 : 300), longTextMode: z.union(['message', 'heading']).default('message'),
@@ -251,7 +250,7 @@ module.exports = {
           enqueue(hostItem('approval', session, event, text || 'An approval request needs your attention.', null))
           return
         }
-        if (!event || type !== 'assistant/message' || !cfg.automaticSpeech || cfg.automaticSpeechMode !== 'background') return
+        if (!event || type !== 'assistant/message' || !cfg.automaticSpeech) return
         if (event.surfaceOp && event.surfaceOp !== 'append') return
         const message = event.data && event.data.message
         const text = visibleText(message)
