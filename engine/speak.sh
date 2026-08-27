@@ -26,7 +26,7 @@
 #     (a C/POSIX locale would silently strip all CJK text).
 #   * The cleaning pipeline mirrors speak.ps1 (markdown/URL/emoji stripped).
 #   * `say` has no volume flag — volume is controlled by the system output.
-#   * Length guard: text over $MAX_CHARS is replaced with $LONG_MSG.
+#   * Length guard: a positive $MAX_CHARS replaces longer text with $LONG_MSG; 0 disables it.
 # ==============================================================================
 
 export LC_ALL="${LC_ALL:-en_US.UTF-8}"
@@ -35,7 +35,7 @@ TEXT=""
 FILE=""
 VOICE=""
 RATE=175          # words per minute (say default)
-MAX_CHARS=300
+MAX_CHARS=0       # 0 disables the length guard
 LONG_MSG="本次播报内容较长，请自行阅读。"
 LONG_MODE="message"   # message | heading
 
@@ -69,7 +69,7 @@ if [ -z "$TEXT" ]; then exit 0; fi
 # 'message': fixed prompt. 'heading': speak the largest markdown heading instead
 # (fewest '#' wins, tie -> first; no heading -> first non-empty line; the
 # cleaned candidate is still subject to the ceiling below).
-if [ "${#TEXT}" -gt "$MAX_CHARS" ] && [ "$LONG_MODE" = "heading" ]; then
+if [ "$MAX_CHARS" -gt 0 ] && [ "${#TEXT}" -gt "$MAX_CHARS" ] && [ "$LONG_MODE" = "heading" ]; then
   TEXT=$(printf '%s' "$TEXT" | /usr/bin/perl -CSD -e '
     my $best = 7; my $cand = ""; my $first = "";
     while (<STDIN>) {
@@ -92,13 +92,13 @@ TEXT=$(printf '%s' "$TEXT" | /usr/bin/perl -CSD -pe '
   s/\[([^\]]*)\]\([^\)]*\)/$1/g;  # markdown links
   s|https?://\S+| |g;             # bare URLs
   s/[-#*_~|>+]+/ /g;              # emphasis / marker chars
-  s/[^\p{Han}\x{3000}-\x{303F}\x{FF00}-\x{FFEF}\x{2000}-\x{206F}\x{20}-\x{7E}]//g;  # emoji / specials
+  s/[^\p{L}\p{N}\p{Han}\x{3000}-\x{303F}\x{FF00}-\x{FFEF}\x{2000}-\x{206F}\x{20}-\x{7E}]//g;  # emoji / specials; retain accented letters
   s/\s+/ /g;                      # collapse whitespace
 ')
 TEXT=$(printf '%s' "$TEXT" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 
 # ---------- final ceiling (also catches over-long heading candidates) ----------
-if [ "${#TEXT}" -gt "$MAX_CHARS" ]; then
+if [ "$MAX_CHARS" -gt 0 ] && [ "${#TEXT}" -gt "$MAX_CHARS" ]; then
   TEXT="$LONG_MSG"
 fi
 

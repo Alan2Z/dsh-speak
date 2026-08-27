@@ -34,7 +34,7 @@
 //           announceQuestions: true # speak ask_user_question content
 //           stripApprovalPrefix: true  # strip "escalate sandbox to ...: " prefix
 //           longTextMode: message   # message | heading (speak largest md heading)
-//           maxChars: 300           # engine per-utterance ceiling
+//           maxChars: 0             # 0 = no ceiling on macOS; 300 default on Windows
 //           volume: 50              # Windows only
 //           rate: 0                 # 0 = engine default (Windows SAPI scale / macOS wpm)
 'use strict'
@@ -78,7 +78,8 @@ module.exports = {
       announceQuestions: config.announceQuestions !== false,
       stripApprovalPrefix: config.stripApprovalPrefix !== false,
       longTextMode: config.longTextMode || 'message',
-      maxChars: Number(config.maxChars != null ? config.maxChars : 300) || 300,
+      // macOS `say` handles long text; retain Windows' protective ceiling.
+      maxChars: Number(config.maxChars != null ? config.maxChars : (process.platform === 'darwin' ? 0 : 300)),
       volume: Number(config.volume != null ? config.volume : 50) || 50,
       rate: Number(config.rate != null ? config.rate : 0) || 0,
     }
