@@ -23,10 +23,10 @@ and is structured so any harness can plug in.
   final reply (skips reasoning/tool-call narration, merges multi-step messages).
 - **Gets your attention**: announces approval requests (hears "需要你的审批" when
   the agent is waiting on you) and questions the agent asks via `ask_user_question`.
-- **Per-message replay** (1.7.0): every assistant message has a 🔊 button —
-  click to replay that turn, click again to stop, click another to switch. Speech
-  execution stays fully owned by the DSH host (keeps speaking even with the
-  browser closed).
+- **Final-reply replay** (1.7.0): every final reply (turn tail) has a 🔊 button
+  in its action bar — click to replay that message, click again to stop, click
+  another to switch. Speech execution stays fully owned by the DSH host (keeps
+  speaking even with the browser closed).
 - **Host speech queue** (1.7.0): only one native speech process runs at a time;
   queued items continue automatically. A WebSocket syncs the live state (which
   message is speaking, queue length) to the UI.
@@ -284,7 +284,7 @@ document):
         announceTurnEnd: false     # turn/end — "第 N 轮对话完成"
         announceCommandDone: false # command/done — command finished/failed
         announceGoalChange: false  # goal/change — goal created/updated/completed
-        announceToolErrors: false  # tool/result with error — error summary
+        announceToolErrors: false  # tool/result error — announce (english dropped)
         announceTodoWrite: false   # todo/write — todo list updated
 ```
 
@@ -319,7 +319,7 @@ document):
 | `announceTurnEnd` | `false` | announce "第 N 轮对话完成/中断/异常结束" on turn end (`turn/end`) |
 | `announceCommandDone` | `false` | announce when a command finishes or fails (`command/done`) |
 | `announceGoalChange` | `false` | announce goal created/updated/completed/paused/resumed (`goal/change`, objective head) |
-| `announceToolErrors` | `false` | announce an error summary when a tool call returns an error (`tool/result` with `error` or an `isError` content block) |
+| `announceToolErrors` | `false` | announce "工具调用出错" when a tool call returns an error (`tool/result` with `error` or an `isError` content block; English details / technical codes dropped, Chinese details kept) |
 | `announceTodoWrite` | `false` | announce "待办已更新：n/m 完成" when the agent updates its todos (`todo/write`) |
 
 #### Long-text modes
@@ -393,7 +393,7 @@ adapters/
   claude-code/
     stop-hook.ps1        Claude Code Stop hook trigger
 client/
-  client.js              DSH browser bundle: per-message Speak/Stop button + Settings → dsh-speak settings page
+  client.js              DSH browser bundle: turn-tail Speak/Stop button + Settings → dsh-speak settings page
 docs/
   DESIGN.md              full design rationale, pitfalls, extension guide
 ```

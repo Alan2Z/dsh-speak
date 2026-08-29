@@ -514,8 +514,11 @@ module.exports = {
             .filter(block => block && block.isError === true)
             .map(block => block.text || block.code || '').filter(Boolean).join(' ')
           if (err || errText) {
-            const detail = (errText || (err && err.code) || (err && err.name) || '工具调用出错').replace(/\s+/g, ' ').trim().slice(0, 60)
-            enqueue(hostItem('tool/result', session, event, `工具调用出错：${detail}`, null))
+            const detail = (errText || (err && err.code) || (err && err.name) || '').replace(/\s+/g, ' ').trim().slice(0, 60)
+            // 纯英文错误详情（PowerShell 固定模板 / 技术 code）对中文用户可读性差，
+            // 播报时截掉，只保留含中文的详情（如"文件不存在"）
+            const readable = /[\u4e00-\u9fff]/.test(detail) ? `：${detail}` : ''
+            enqueue(hostItem('tool/result', session, event, `工具调用出错${readable}`, null))
           }
           return
         }

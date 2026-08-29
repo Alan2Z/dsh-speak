@@ -23,8 +23,9 @@ dsh-speak 通过系统语音合成把 Agent 的最终回复朗读出来——Win
   （跳过 reasoning/工具调用旁白，合并同一回复的多步消息）。
 - **提醒你**：审批请求（Agent 等你操作时会播"需要你的审批"）和 Agent 通过
   `ask_user_question` 提出的问题都会播报。
-- **每条消息重播**（1.7.0）：每条 assistant 消息旁有 🔊 按钮——点击重播该回合、
-  再点停止、点另一条切换。语音执行完全由 DSH host 拥有（浏览器关掉也继续读）。
+- **最终回复重播**（1.7.0）：每条最终回复（回合尾部）操作栏有 🔊 按钮——点击
+  重播该条回复、再点停止、点另一条切换。语音执行完全由 DSH host 拥有（浏览器
+  关掉也继续读）。
 - **host 语音队列**（1.7.0）：同一时间只运行一个语音进程，队列自动串行；
   WebSocket 实时同步"正在读哪条、队列长度"到 UI。
 - **多事件可选播报**（1.6.0）：回合结束、命令完成、目标变更、工具出错、
@@ -263,7 +264,7 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
         announceTurnEnd: false     # 回合结束（"第 N 轮对话完成"）
         announceCommandDone: false # 命令完成/失败（command/done）
         announceGoalChange: false  # 目标创建/更新/完成（goal/change）
-        announceToolErrors: false  # 工具调用出错时播报摘要（tool/result）
+        announceToolErrors: false  # 工具调用出错时播报（英文详情截掉，tool/result）
         announceTodoWrite: false   # 待办列表更新（todo/write）
 ```
 
@@ -298,7 +299,7 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
 | `announceTurnEnd` | `false` | 回合结束时播报"第 N 轮对话完成/中断/异常结束"（`turn/end`） |
 | `announceCommandDone` | `false` | 命令执行完成/失败时播报（`command/done`） |
 | `announceGoalChange` | `false` | 目标创建/更新/完成/暂停/恢复时播报（`goal/change`，含目标标题前 40 字） |
-| `announceToolErrors` | `false` | 工具调用返回错误时播报错误摘要（`tool/result` 带 `error` 或 `isError` 内容块时） |
+| `announceToolErrors` | `false` | 工具调用返回错误时播报"工具调用出错"（英文错误详情/技术 code 截掉，只保留中文详情；`tool/result` 带 `error` 或 `isError` 内容块时） |
 | `announceTodoWrite` | `false` | agent 更新待办列表时播报"待办已更新：n/m 完成"（`todo/write`） |
 
 #### 超长文本模式
@@ -370,7 +371,7 @@ adapters/
   claude-code/
     stop-hook.ps1        Claude Code Stop hook 触发器
 client/
-  client.js              DSH 浏览器端 bundle：每条消息 Speak/Stop 按钮 + 设置 → dsh-speak 设置页
+  client.js              DSH 浏览器端 bundle：回合尾部 Speak/Stop 按钮 + 设置 → dsh-speak 设置页
 docs/
   DESIGN.zh-CN.md        完整设计文档：设计取舍、踩坑记录、扩展指南
 ```

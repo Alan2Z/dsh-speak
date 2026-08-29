@@ -125,9 +125,10 @@ no "reply finished" hook, so the plugin observes the session event stream:
   automatically. A `/dsh-speak/control` POST route (play/stop/status) and a
   `/dsh-speak/ws` WebSocket broadcast the authoritative speech state (which
   message is speaking, queue length).
-- **Per-message replay** (1.7.0): the 🔊 button on each assistant message calls
-  the control route to replay that turn; speech execution stays fully owned by
-  the host (keeps speaking even with the browser closed).
+- **Final-reply replay** (1.7.0): the 🔊 button in the turn-tail (final reply)
+  action bar calls the control route to replay **that final message**; speech
+  execution stays fully owned by the host (keeps speaking even with the browser
+  closed).
 - **`queueAllMessages` switch** (1.7.0, default off): off = throttled final
   reply + optional events (as before); on = every assistant message is enqueued
   immediately (intermediate messages spoken too).
@@ -162,12 +163,12 @@ package name `'dsh-speak'` — this is the file-install path):
 A DSH client bundle (`window.__ModuleLoader__.load({ id: 'dsh-speak', factory })`)
 that registers two pieces of UI:
 
-- **Per-message Speak button** (1.7.0, from PR #2): registered into the
-  `conversation.chat.assistant-actions` slot (message action bar). Clicking 🔊
-  POSTs to `/dsh-speak/control` to replay that turn; clicking again stops;
-  clicking another switches. The button's speaking/paused state is derived from
-  the authoritative host state over the `/dsh-speak/ws` WebSocket (matched by
-  session + turn identity).
+- **Turn-tail Speak button** (1.7.0, from PR #2): registered into the
+  `conversation.chat.assistant-actions` slot (the turn's final-reply action bar).
+  Clicking 🔊 POSTs to `/dsh-speak/control` to replay that final message; clicking
+  again stops; clicking another switches. The button's speaking/paused state is
+  derived from the authoritative host state over the `/dsh-speak/ws` WebSocket
+  (matched by session + turn identity).
 - **Settings → dsh-speak settings page** (1.7.0): registered into the
   `settings.section` slot, drawn with `@deepseek-ai/dsh-client-ui-primitives`
   (Button / DisclosureRow / Input; Toggle / Options / SettingInput helpers). Every
@@ -205,7 +206,7 @@ returns immediately. (Async spawning is safe here — the nested-spawn restricti
 | `turn/end`                       | 🟡 off by default; announces "第 N 轮对话完成/中断/异常结束" |
 | `command/done`                   | 🟡 off by default; announces "命令执行完成/失败" |
 | `goal/change`                    | 🟡 off by default; announces "已创建目标/目标已完成…" (head) |
-| `tool/result`                    | 🟡 off by default; announces an error summary only when `error` or an `isError` content block is present |
+| `tool/result`                    | 🟡 off by default; announces "工具调用出错" only when `error` or an `isError` content block is present (English details / technical codes are dropped, Chinese details kept) |
 | `todo/write`                     | 🟡 off by default; announces "待办已更新：n/m 完成" |
 | `assistant/message` (queueAllMessages on) | ✅ every message enqueued immediately (intermediate spoken too) |
 | manual replay (per-message 🔊)   | ✅ clear queue → stop current → speak that turn |

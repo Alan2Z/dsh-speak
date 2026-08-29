@@ -110,7 +110,7 @@ async function main() {
   assert.strictEqual(announced[0], '第 3 轮对话完成', 'turn/end completed')
   assert.strictEqual(announced[1], '命令执行失败', 'command/done error')
   assert.ok(announced[2].startsWith('已创建目标：重构语音播报模块'), `goal create: ${announced[2]}`)
-  assert.strictEqual(announced[3], '工具调用出错：EBLOCKED', 'tool error code')
+  assert.strictEqual(announced[3], '工具调用出错', 'tool error (english code dropped)')
   assert.strictEqual(announced[4], '待办已更新：1/3 完成', 'todo write')
 
   // ---- 2. default mode: throttled final reply ----
@@ -198,8 +198,17 @@ async function main() {
   await t10.flush(20)
   await t10.finishAll()
   await t10.flush(20)
-  assert.ok(announced.some(t => t === '工具调用出错：Cannot find path because it does not exist'),
-    `isError block announced: ${JSON.stringify(announced)}`)
+  assert.ok(announced.some(t => t === '工具调用出错'),
+    `isError english text dropped: ${JSON.stringify(announced)}`)
+
+  // ---- 10b. tool/result with Chinese error detail is kept ----
+  const t10b = applyWith({ announceToolErrors: true, throttleMs: 10 })
+  t10b.fire('tool/result', { message: { content: [{ type: 'text', text: '文件不存在，请检查路径', isError: true }] } })
+  await t10b.flush(20)
+  await t10b.finishAll()
+  await t10b.flush(20)
+  assert.ok(announced.some(t => t === '工具调用出错：文件不存在，请检查路径'),
+    `chinese detail kept: ${JSON.stringify(announced)}`)
 
   // ---- 11. multi-question: each question separate, numbered, gap between ----
   const t11 = applyWith({ announceQuestions: true, questionGapMs: 2000, throttleMs: 10 })

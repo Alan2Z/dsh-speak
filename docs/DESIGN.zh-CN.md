@@ -113,8 +113,8 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
   可选事件、手动重播）统一进入 FIFO 队列，**同一时间只运行一个语音进程**，
   读完自动播下一条；`/dsh-speak/control` POST 路由（play/stop/status）和
   `/dsh-speak/ws` WebSocket 广播权威播放状态（正在读哪条、队列长度）。
-- **每条消息重播**（1.7.0）：assistant 消息操作栏的 🔊 按钮调 control 路由
-  重播该回合；语音执行完全由 host 拥有（浏览器关掉也继续）。
+- **最终回复重播**（1.7.0）：回合尾部（最终回复）操作栏的 🔊 按钮调 control
+  路由重播**该条最终回复**；语音执行完全由 host 拥有（浏览器关掉也继续）。
 - **`queueAllMessages` 开关**（1.7.0，默认关）：关 = 默认节流最终回复 + 可选
   事件；开 = 每条 assistant 消息立即入队朗读（中间消息也读）。
 - **可选事件播报**（1.6.0，默认全关）：`turn/end`、`command/done`、
@@ -146,11 +146,11 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
 一个 DSH client bundle（`window.__ModuleLoader__.load({ id: 'dsh-speak',
 factory })`），注册两条 UI：
 
-- **每条消息的 Speak 按钮**（1.7.0，源自 PR #2）：注册进
-  `conversation.chat.assistant-actions` slot（消息操作栏）。点击 🔊 调
-  `/dsh-speak/control` 重播该回合，再点停止，点另一条切换；按钮状态（播放中/
-  暂停）由 `/dsh-speak/ws` WebSocket 的 host 权威状态推导（session + turn
-  身份匹配）。
+- **回合尾部的 Speak 按钮**（1.7.0，源自 PR #2）：注册进
+  `conversation.chat.assistant-actions` slot（该回合最终回复的操作栏）。点击 🔊
+  调 `/dsh-speak/control` 重播该条最终回复，再点停止，点另一条切换；按钮状态
+  （播放中/暂停）由 `/dsh-speak/ws` WebSocket 的 host 权威状态推导（session +
+  turn 身份匹配）。
 - **设置 → dsh-speak 设置独立设置页**（1.7.0）：注册进 `settings.section` slot。
   用 `@deepseek-ai/dsh-client-ui-primitives` 的 Button/DisclosureRow/Input
   绘制（Toggle/Options/SettingInput 组件），所有配置项（总开关、自动朗读、
@@ -184,7 +184,7 @@ Claude Code *确实*有 Stop hook。hook JSON（含 `transcript_path`）从 stdi
 | `turn/end`（回合结束）           | 🟡 默认关；开则播报"第 N 轮对话完成/中断/异常结束" |
 | `command/done`（命令完成）       | 🟡 默认关；开则播报"命令执行完成/失败" |
 | `goal/change`（目标变更）        | 🟡 默认关；开则播报"已创建目标/目标已完成…（前 40 字）" |
-| `tool/result`（工具结果）        | 🟡 默认关；开则仅当带 `error` 或 `isError` 内容块时播报错误摘要 |
+| `tool/result`（工具结果）        | 🟡 默认关；开则仅当带 `error` 或 `isError` 内容块时播报"工具调用出错"（英文详情/技术 code 截掉，只保留中文详情） |
 | `todo/write`（待办更新）         | 🟡 默认关；开则播报"待办已更新：n/m 完成" |
 
 | `assistant/message`（queueAllMessages 开）| ✅ 每条立即入队（中间消息也读） |
