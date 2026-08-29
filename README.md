@@ -23,13 +23,21 @@ and is structured so any harness can plug in.
   final reply (skips reasoning/tool-call narration, merges multi-step messages).
 - **Gets your attention**: announces approval requests (hears "需要你的审批" when
   the agent is waiting on you) and questions the agent asks via `ask_user_question`.
+- **Per-message replay** (1.7.0): every assistant message has a 🔊 button —
+  click to replay that turn, click again to stop, click another to switch. Speech
+  execution stays fully owned by the DSH host (keeps speaking even with the
+  browser closed).
+- **Host speech queue** (1.7.0): only one native speech process runs at a time;
+  queued items continue automatically. A WebSocket syncs the live state (which
+  message is speaking, queue length) to the UI.
 - **Optional event announcements** (1.6.0): turn end, command done, goal changes,
   tool errors, and todo updates can each be announced, toggled independently
   (off by default).
-- **Visual configuration** (1.6.0): a dsh-speak card appears under
-  Settings → Plugins → Plugin configuration — every option (event toggles,
-  throttle, volume, rate, …) is editable and saved from the Web UI, no
+- **Visual configuration** (1.7.0): a dedicated Settings → dsh-speak settings
+  page — every option (master switch, automatic speech, Markdown cleaning, code
+  blocks, event toggles, fixed prompt, …) is editable from the Web UI, no
   hand-edited YAML.
+- **Master switch** (1.6.0): silence everything with one toggle.
 - **Bundle auto-registration** (1.3.0): declare the package in `dsh.profile.bundles`
   and the plugin registers itself via the bundled `cordis.patch.yml` — no manual
   patch entry needed.
@@ -156,8 +164,8 @@ npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
 #        - id: speech-hook
 #          name: 'dsh-speak'
 
-# 3. no restart needed — the patch watcher hot-reloads; pure-text replies are
-#    announced after ~1.5 s (tool-calling replies are intentionally not announced)
+# 3. no restart needed — the patch watcher hot-reloads; replies are announced
+#    after the throttle (~1.5 s); tool-calling replies are announced at turn end
 ```
 
 > With pnpm installed, `dsh plugin --profile web add dsh-speak` works identically.
@@ -241,9 +249,9 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
 **Either way works, and they stay in sync** (both write the same settings
 document):
 
-1. **Web UI (1.6.0, recommended)**: Settings → Plugins → Plugin configuration →
-   the Voice announcements card. Every option is editable and saved there
-   (visible in `dsh --dump-config`, per-profile, survives npm updates).
+1. **Web UI (1.7.0, recommended)**: a dedicated Settings → dsh-speak settings
+   page. Every option is editable and saved there (visible in `dsh --dump-config`,
+   per-profile, survives npm updates).
 2. **Profile patch `config` block** (equivalent):
 
 ```yaml
@@ -252,13 +260,22 @@ document):
     - id: speech-hook
       name: 'dsh-speak'
       config:
+        enabled: true           # master switch: false silences everything
+        automaticSpeech: true   # auto-speak final replies
+        queueAllMessages: false # true = enqueue every assistant message as it arrives
+        cleanMarkdownFormatting: true # convert Markdown to natural speech
+        readInlineCode: true    # read inline code without backticks
+        codeBlocks: smart       # all | smart | replace (fenced code blocks)
+        codeBlockMaxChars: 300  # smart-mode code block character limit
+        codeBlockReplacementText: 'You can see the code in our history.' # replace-mode text
         throttleMs: 1500        # merge delay before announcing (ms)
         engine: ''              # engine path override; '' = auto-resolve
         announceApprovals: true # speak approval requests
         announceQuestions: true # speak ask_user_question content
         stripApprovalPrefix: true  # strip "escalate sandbox to ...: " prefix
         longTextMode: message   # message | heading (speak largest md heading)
-        maxChars: 300           # engine per-utterance ceiling
+        longTextMessage: '本次播报内容较长，请自行阅读。' # fixed prompt for message mode
+        maxChars: 300           # per-utterance ceiling (macOS default 0 = unlimited)
         volume: 50              # Windows only
         rate: 0                 # 0 = engine default (Windows SAPI scale / macOS wpm)
         # —— optional event announcements (1.6.0, all off by default) ——
@@ -270,10 +287,49 @@ document):
 ```
 
 > Resolution order: schema default → patch `config` → UI user settings. Fields
-> edited in the UI carry an "Overridden" badge and can be reset to default;
-> fields written in YAML show up in the UI too.
+> written in YAML show up in the UI too. Platform note: `maxChars` defaults to
+> 0 on macOS (`say` has no ceiling) and 300 on Windows (SAPI safe limit).
 
-See [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.md) for the full customization guide.
+#### Option reference
+
+| option | default | effect |
+| ------ | ------- | ------ |
+| `enabled` | `true` | **master switch**: when off, nothing is ever announced (final reply / approvals / questions / optional events / replay) |
+| `automaticSpeech` | `true` | auto-speak final replies; manual replay always remains available |
+| `queueAllMessages` | `false` | `true` enqueues every assistant message as it arrives (intermediate messages spoken too, FIFO); default only speaks the throttled final reply |
+| `cleanMarkdownFormatting` | `true` | converts Markdown into natural speech text (link labels kept, URLs/heading/emphasis cleaned) |
+| `readInlineCode` | `true` | read inline code without backtick markers |
+| `codeBlocks` | `smart` | fenced code blocks: `all` read / `smart` (read when ≤ `codeBlockMaxChars`) / `replace` with the replacement text |
+| `codeBlockMaxChars` | `300` | code block character limit for `smart` mode |
+| `codeBlockReplacementText` | `You can see the code in our history.` | replacement spoken in `replace` mode (or over-limit `smart`) |
+| `throttleMs` | `1500` | how long a reply's text waits before being announced (merges multi-step messages) |
+| `engine` | `''` | explicit engine script path; `''` auto-resolves: `<package>/engine/<platform>` → `~/.dsh/hooks/<platform>` |
+| `announceApprovals` | `true` | announce `approval/asked` events (reason, or the fixed prompt) |
+| `announceQuestions` | `true` | announce `ask_user_question` calls as "question（单选/多选），选项：…" |
+| `stripApprovalPrefix` | `true` | strip the fixed English template prefix (`escalate sandbox to danger-full-access: `) from approval reasons, keeping the human explanation |
+| `longTextMode` | `message` | `message` = fixed prompt for over-long text; `heading` = speak the largest markdown heading instead (see below) |
+| `longTextMessage` | `本次播报内容较长，请自行阅读。` | the fixed prompt spoken for over-long text in `message` mode (editable in the UI) |
+| `maxChars` | platform | per-utterance ceiling. **macOS default 0 (`say` has no ceiling); Windows default 300** (SAPI fails silently beyond ~375-470) |
+| `volume` | `50` | Windows only (0-100); macOS volume follows the system |
+| `rate` | `0` | `0` = engine default (Windows SAPI scale, e.g. 1; macOS words-per-minute, e.g. 175) |
+| `announceTurnEnd` | `false` | announce "第 N 轮对话完成/中断/异常结束" on turn end (`turn/end`) |
+| `announceCommandDone` | `false` | announce when a command finishes or fails (`command/done`) |
+| `announceGoalChange` | `false` | announce goal created/updated/completed/paused/resumed (`goal/change`, objective head) |
+| `announceToolErrors` | `false` | announce an error summary when a tool call returns an error (`tool/result` with `error` or an `isError` content block) |
+| `announceTodoWrite` | `false` | announce "待办已更新：n/m 完成" when the agent updates its todos (`todo/write`) |
+
+#### Long-text modes
+
+When cleaned text exceeds `maxChars`:
+
+- **`message`** (default): speak `longTextMessage` (`本次播报内容较长，请自行阅读。`,
+  editable in the UI or YAML).
+- **`heading`**: pick the *largest* markdown heading in the raw text — fewest `#`
+  wins, tie → first; if there is no heading line, the first non-empty line is used.
+  The chosen candidate is still cleaned and subject to the `maxChars` ceiling,
+  falling back to the message if it is itself too long.
+
+Full architecture and design rationale: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Customizing (survives npm updates)
 
@@ -328,12 +384,12 @@ engine/                  harness-agnostic speech engine (PowerShell + SAPI5 / ba
   speech-summary.ps1     blocking reply-summary announcement
 adapters/
   dsh/                   DSH web plugin + one-command installer
-    speech-hook.js       session-event trigger (throttle + tool-call cancel + optional events + settings registration)
+    speech-hook.js       session-event trigger (throttle/cancel + optional events + FIFO speech queue + WebSocket + settings registration)
     install.ps1          copies + registers + backs up
   claude-code/
     stop-hook.ps1        Claude Code Stop hook trigger
 client/
-  client.js              DSH browser bundle: plugin configuration card (Settings → Plugins → Plugin configuration)
+  client.js              DSH browser bundle: per-message Speak/Stop button + Settings → dsh-speak settings page
 docs/
   DESIGN.md              full design rationale, pitfalls, extension guide
 ```

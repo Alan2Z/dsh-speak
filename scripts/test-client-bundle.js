@@ -1,17 +1,16 @@
-// test-client-bundle.js — smoke test for the dsh-speak browser bundle.
-// Stubs window.__ModuleLoader__ and the client services (slots / locale /
-// settingsScope), evaluates client/client.js exactly as DSH would load it, and
-// verifies: the bundle registers with the right id, apply() mounts a card into
-// settings.plugin.item keyed 'dsh-speak', and the card renders with the current
-// settings values. This exercises the handwritten bundle's contract without a
-// browser.
+// test-client-bundle.js — smoke test for the merged (1.7.0) dsh-speak browser
+// bundle. Stubs window.__ModuleLoader__ and the client services (slots /
+// settingsScope / timer), evaluates client/client.js exactly as DSH would load
+// it, and verifies: the bundle registers with the right id, apply() registers
+// the per-message Speak action (conversation.chat.assistant-actions) and the
+// Settings → dsh-speak settings page (settings.section), and settingsScope is
+// bound to the dsh-speak namespace.
 'use strict'
 const assert = require('assert')
 const path = require('path')
 const fs = require('fs')
 
-// Let this script's own require('react')/require('react-dom/server') resolve
-// from the DSH installation (the profile's flat node_modules junction farm).
+// Let this script's own require('react') resolve from the DSH installation.
 const dshProfilesNodeModules = path.join(process.env.USERPROFILE, '.dsh', 'profiles', 'node_modules')
 if (process.env.NODE_PATH) process.env.NODE_PATH += path.delimiter + dshProfilesNodeModules
 else process.env.NODE_PATH = dshProfilesNodeModules
@@ -24,24 +23,23 @@ const NS = 'dsh-speak'
 const slots = {
   inject(name, register) {
     const off = register()
-    registrations.slots.push({ name, key: off && off.options && off.options.key, off })
+    registrations.slots.push({ name, key: off && off.options && off.options.id, off })
   },
   register(opts, component) {
     registrations.slots.push({ registered: opts, component })
     return { options: opts }
   },
 }
-const dictionaries = {}
-const locale = {
-  register(ns, dict) { dictionaries[ns] = dict },
-  bind(ns) { return (key) => { const d = dictionaries[ns] || {}; return d[key] !== undefined ? d[key] : key } },
-}
 let boundScope = null
 const scopeSnapshot = {
   status: 'ready',
   value: {
+    enabled: true, automaticSpeech: true, queueAllMessages: false,
+    cleanMarkdownFormatting: true, readInlineCode: true, codeBlocks: 'smart',
+    codeBlockMaxChars: 300, codeBlockReplacementText: 'You can see the code in our history.',
     throttleMs: 1500, engine: '', announceApprovals: true, announceQuestions: true,
-    stripApprovalPrefix: true, longTextMode: 'message', maxChars: 300, volume: 50, rate: 0,
+    stripApprovalPrefix: true, longTextMode: 'message', longTextMessage: '本次播报内容较长，请自行阅读。',
+    maxChars: 300, volume: 50, rate: 0,
     announceTurnEnd: true, announceCommandDone: false, announceGoalChange: false,
     announceToolErrors: false, announceTodoWrite: false,
   },
@@ -61,15 +59,20 @@ const settingsScope = {
     }
   },
 }
-const effect = (fn) => fn()
-
+const effect = (fn) => { if (typeof fn === 'function') { const r = fn(); if (typeof r === 'function') return r; return () => {} } return () => {} }
+// locale mock: register() stores dictionaries, bind() returns a lookup that
+// falls back to the key (so English UI keys resolve to their zh/en values).
+const dictionaries = {}
+const locale = {
+  register(ns, dict) { dictionaries[ns] = dict },
+  bind(ns) { return (key) => { const d = dictionaries[ns] || {}; return d[key] !== undefined ? d[key] : key } },
+}
 const ctx = {
   effect,
-  locale,
+  timeout() { return () => {} },
   slots,
-  inject(services, cb) {
-    if (services.includes('settingsScope')) cb({ settingsScope, slots })
-  },
+  settingsScope, // declared inject: ['slots', 'timer', 'settingsScope', 'locale']
+  locale,
 }
 
 // --- load the bundle exactly as DSH does ----------------------------------
@@ -79,19 +82,35 @@ global.window = {
     load(registration) { loaded = registration },
   },
 }
-// Resolve react from the DSH installation so the factory gets real hooks.
 const reactPath = require.resolve('react', { paths: [dshProfilesNodeModules] })
 const reactRequire = require(reactPath)
 
 const bundlePath = path.join(__dirname, '..', 'client', 'client.js')
 const code = fs.readFileSync(bundlePath, 'utf8')
 assert.ok(code.includes("window.__ModuleLoader__.load({"), 'bundle must register via __ModuleLoader__.load')
-// evaluate in a context where `require` is our patched resolver
+
+// Fake primitives: the bundle requires Button / DisclosureRow / IconPauseOutline16 / Input.
+const fakePrimitives = {
+  Button: (props) => null,
+  DisclosureRow: (props) => props.children || null,
+  IconPauseOutline16: () => null,
+  Input: (props) => null,
+}
+
 const vm = require('vm')
 const sandbox = {
   window: global.window,
+  document: {
+    createElement: () => ({ dataset: {}, textContent: '', appendChild() {}, remove() {} }),
+    head: { appendChild() {} },
+    querySelector: () => null,
+  },
+  location: { protocol: 'http:', host: 'localhost:3080' },
+  WebSocket: function () { this.onmessage = null; this.onclose = null; this.onerror = null; this.close = () => {} },
+  fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve({}) }),
   require: (spec) => {
     if (spec === 'react' || spec === 'react/jsx-runtime') return reactRequire
+    if (spec === '@deepseek-ai/dsh-client-ui-primitives') return fakePrimitives
     return require(spec)
   },
   module: { exports: {} },
@@ -110,24 +129,14 @@ assert.strictEqual(typeof mod.apply, 'function', 'factory must export apply')
 assert.ok(Array.isArray(mod.inject), 'factory must export inject array')
 console.log('exports.inject =', JSON.stringify(mod.inject))
 
-// --- run apply() and check the card registration ---------------------------
+// --- run apply() and check registrations ----------------------------------
 mod.apply(ctx)
-const card = registrations.slots.find((r) => r.registered && r.registered.name === 'settings.plugin.item' && r.registered.key === NS)
-assert.ok(card, 'card must register into settings.plugin.item keyed dsh-speak')
-console.log('card registered: settings.plugin.item key=' + card.registered.key)
-
-// --- render the card component with React ---
-// The registration wraps the component: register({...}, () => h(Card, props)).
-// `card.component` is that zero-arg thunk; call it once to get the element.
-// We assert structural validity with the SAME react instance the bundle used
-// (React.isValidElement). Rendered behavior (collapsed-by-default, expand on
-// click, unsaved badge) is verified end-to-end against the live DSH web UI
-// with Playwright (see dsh-card-collapse check), because react-dom/server here
-// resolves to a different react copy than the bundle's seed react.
-const React = reactRequire
-const cardNode = card.component()
-assert.ok(React.isValidElement(cardNode), 'card component must return a valid React element')
-console.log('card component returns valid React element; type=' + (typeof cardNode.type === 'function' ? cardNode.type.name || '(anonymous)' : String(cardNode.type)))
+const speakAction = registrations.slots.find((r) => r.registered && r.registered.name === 'conversation.chat.assistant-actions' && r.registered.id === 'speak')
+assert.ok(speakAction, 'must register the Speak message action')
+console.log('Speak message action registered (conversation.chat.assistant-actions) ✓')
+const settingsPage = registrations.slots.find((r) => r.registered && r.registered.name === 'settings.section' && r.registered.id === 'speak')
+assert.ok(settingsPage, 'must register the Settings → dsh-speak settings page')
+console.log('Settings → dsh-speak settings page registered (settings.section) ✓')
 
 // scope must have been bound to the right namespace
 assert.ok(boundScope !== null && boundScope.spec.namespace === 'dsh-speak', 'scope bound to dsh-speak')

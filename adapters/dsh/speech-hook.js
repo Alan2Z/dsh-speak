@@ -1,72 +1,63 @@
-// speech-hook.js — DSH web adapter: auto voice-announce the final assistant reply
+// speech-hook.js — DSH web adapter: voice-announce assistant activity
 // ==============================================================================
-// Listens to the session event stream (session/event), watches for
-// assistant/message append events, extracts the final reply text, and hands it to
-// the speech engine (engine/speak.ps1 on Windows, engine/speak.sh on macOS)
-// through a hidden, non-blocking child process.
+// Listens to the session event stream (session/event), extracts the final reply
+// text, and hands it to the speech engine (engine/speak.ps1 on Windows,
+// engine/speak.sh on macOS) through a hidden, non-blocking child process.
+//
+// Since 1.7.0 this is the merged host of the original dsh-speak behavior and
+// victorwads' PR #2 (turn-level replay + host FIFO speech queue + WebSocket
+// state sync + native Speak settings page):
+//
+//   * a host-owned FIFO speech queue: only one native speech process runs at a
+//     time; queued items continue automatically when the current one finishes
+//   * every eligible item (final reply, approvals, questions, optional events,
+//     manual replay) is enqueued, so the WebSocket state (which message is
+//     speaking, queue length) is always truthful — even for automatic replies
+//   * `queueAllMessages` (default off) switches between two automatic modes:
+//       - off (default): final replies are throttled/merged as before, plus the
+//         optional event announcements; tool calls cancel pending narration
+//       - on: every assistant/message is enqueued immediately as it arrives
+//   * a `/dsh-speak/control` POST route (play/stop/status) and a
+//     `/dsh-speak/ws` WebSocket publish the authoritative speech state
+//   * a `dsh-speak` settings namespace via installSettingsSection; schema
+//     defaults → patch config → UI user layer
+//   * `enabled` master switch: when off, nothing is ever enqueued (no sound)
 //
 // Trigger semantics:
-//   * only events with a `text` block are announced (reasoning / tool_use blocks
-//     are skipped)
-//   * a tool/call to `ask_user_question` announces the parsed question
-//     (title + single/multi + options); other tool calls cancel the pending
-//     announcement (that round's assistant text is process narration)
-//   * `approval/asked` is announced immediately (reason with the fixed English
-//     template prefix stripped, or a fixed prompt)
-//   * a final reply with no following tool/call is announced after a throttle
-//     delay (merges multi-step messages from the same reply)
-//   * optional event announcements (all off by default): turn/end,
-//     command/done, goal/change, tool/result errors, todo/write
+//   * assistant/message with a `text` block is announced (reasoning / tool_use
+//     blocks are skipped)
+//   * a tool/call to `ask_user_question` announces the parsed question; other
+//     tool calls cancel the pending throttled announcement (default mode)
+//   * `approval/asked` is announced immediately (reason, else a fixed prompt)
+//   * optional events (turn/end, command/done, goal/change, tool/result errors,
+//     todo/write) are announced when their toggle is on (default off)
 //
-// Configuration — prefer the profile patch `config` block (see docs/CUSTOMIZATION.md):
-//   - insert:
-//       - id: speech-hook
-//         name: 'dsh-speak'
-//         config:
-//           throttleMs: 1500        # merge delay before announcing (ms)
-//           engine: ''              # engine path override; '' = auto-resolve
-//           announceApprovals: true # speak approval requests
-//           announceQuestions: true # speak ask_user_question content
-//           stripApprovalPrefix: true  # strip "escalate sandbox to ...: " prefix
-//           longTextMode: message   # message | heading (speak largest md heading)
-//           maxChars: 300           # engine per-utterance ceiling
-//           volume: 50              # Windows only
-//           rate: 0                 # 0 = engine default (Windows SAPI scale / macOS wpm)
-//           # optional event announcements (off by default):
-//           announceTurnEnd: false     # turn/end — "第 N 轮对话完成"
-//           announceCommandDone: false # command/done — "命令执行完成/失败"
-//           announceGoalChange: false  # goal/change — "目标已创建/更新/完成…"
-//           announceToolErrors: false  # tool/result with error — "工具调用出错：…"
-//           announceTodoWrite: false   # todo/write — "待办已更新：n/m 完成"
-//
-// Since 1.6.0 the plugin also registers a `dsh-speak` settings namespace so the
-// same options are visible and editable in 设置 → 插件 → 插件配置 (the browser
-// half ships in client/client.js). The registration is best-effort: hosts with
-// no settings service (dsh before 0.1.0-rc.7) simply keep the patch config.
+// Configuration — prefer the Web UI (Settings → dsh-speak settings) or the
+// profile patch `config` block (see README.md). All keys resolve as
+// schema default → patch config → UI user layer.
 'use strict'
+
 const { spawn } = require('child_process')
+const { createRequire } = require('module')
+const { WebSocketServer, WebSocket } = require('ws')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
 
-// diagnostic log (for troubleshooting; safe to remove once stable)
 const LOG = path.join(os.tmpdir(), 'dsh-speech-hook.log')
 function log(...args) {
-  try {
-    fs.appendFileSync(LOG, `[${new Date().toISOString()}] ${args.join(' ')}\n`)
-  } catch (e) { /* ignore */ }
+  try { fs.appendFileSync(LOG, `[${new Date().toISOString()}] ${args.join(' ')}\n`) } catch (e) { /* ignore */ }
 }
 
 const ENGINE_NAME = process.platform === 'darwin' ? 'speak.sh' : 'speak.ps1'
 // Settings namespace of this plugin (lowercase kebab-case; must match the
-// browser card's key in client/client.js).
+// browser card's namespace in client/client.js).
 const SETTINGS_NS = 'dsh-speak'
 
 /**
  * Locate the engine script:
  *   1. explicit override (config `engine`)
- *   2. <this package>/engine/<speak.ps1|speak.sh> — works both when running from
- *      a repo checkout and when installed into a profile's node_modules
+ *   2. <this package>/engine/<speak.ps1|speak.sh> — repo checkout or profile install
  *   3. legacy file-copy location (~/.dsh/hooks/<speak.ps1|speak.sh>)
  */
 function resolveEngine(override) {
@@ -76,13 +67,24 @@ function resolveEngine(override) {
   return path.join(os.homedir(), '.dsh', 'hooks', ENGINE_NAME)
 }
 
+// Platform-aware defaults: macOS `say` has no per-utterance ceiling, so
+// `maxChars` defaults to 0 (unlimited) there; Windows keeps the safe 300.
+const DEFAULT_MAX_CHARS = process.platform === 'darwin' ? 0 : 300
+
 // ---------------------------------------------------------------------------
 // Settings namespace (best-effort; see installSettingsSection in dsh-settings)
 // ---------------------------------------------------------------------------
-// The schema mirrors the patch-config keys above. Values resolve as:
+// The schema mirrors every config key. Values resolve as:
 // schema default → patch `config` (base) → user settings layer (the UI).
 const SCHEMA_DEFAULTS = {
   enabled: true,
+  automaticSpeech: true,
+  cleanMarkdownFormatting: true,
+  readInlineCode: true,
+  codeBlocks: 'smart',
+  codeBlockMaxChars: 300,
+  codeBlockReplacementText: 'You can see the code in our history.',
+  queueAllMessages: false,
   throttleMs: 1500,
   engine: '',
   announceApprovals: true,
@@ -90,7 +92,7 @@ const SCHEMA_DEFAULTS = {
   stripApprovalPrefix: true,
   longTextMode: 'message',
   longTextMessage: '本次播报内容较长，请自行阅读。',
-  maxChars: 300,
+  maxChars: DEFAULT_MAX_CHARS,
   volume: 50,
   rate: 0,
   announceTurnEnd: false,
@@ -101,306 +103,414 @@ const SCHEMA_DEFAULTS = {
 }
 
 /**
- * Register the `dsh-speak` settings namespace, then keep `cfg` in sync with the
- * resolved value (defaults → patch base → user layer). Best-effort: any failure
- * (no settings service, missing peer package) leaves `cfg` on the patch config.
- *
- * @param ctx - the plugin context.
- * @param cfg - the mutable config object the event handler reads.
- * @param patch - the patch `config` object (base layer).
+ * Resolve the raw settings value into the mutable `cfg` the queue reads.
+ * Kept as a pure function so both the initial apply and settings onChange use
+ * the same normalization (engine re-resolution, platform maxChars default).
  */
-function installSettingsNamespace(ctx, cfg, patch) {
-  // schemastery has a CJS build; dsh-settings is ESM-only, so load it dynamically.
-  let z
-  let settingsModuleUrl
+function resolveConfig(value) {
+  value = value || {}
+  return {
+    enabled: value.enabled !== false,
+    automaticSpeech: value.automaticSpeech !== false,
+    cleanMarkdownFormatting: value.cleanMarkdownFormatting !== false,
+    readInlineCode: value.readInlineCode !== false,
+    codeBlocks: ['all', 'smart', 'replace'].includes(value.codeBlocks) ? value.codeBlocks : 'smart',
+    codeBlockMaxChars: Number(value.codeBlockMaxChars != null ? value.codeBlockMaxChars : 300),
+    codeBlockReplacementText: String(value.codeBlockReplacementText || 'You can see the code in our history.'),
+    queueAllMessages: value.queueAllMessages === true,
+    throttleMs: Number(value.throttleMs != null ? value.throttleMs : 1500) || 1500,
+    engine: resolveEngine(value.engine || ''),
+    announceApprovals: value.announceApprovals !== false,
+    announceQuestions: value.announceQuestions !== false,
+    stripApprovalPrefix: value.stripApprovalPrefix !== false,
+    longTextMode: value.longTextMode === 'heading' ? 'heading' : 'message',
+    longTextMessage: String(value.longTextMessage || SCHEMA_DEFAULTS.longTextMessage),
+    maxChars: Number(value.maxChars != null ? value.maxChars : DEFAULT_MAX_CHARS) || 0,
+    volume: Number(value.volume != null ? value.volume : 50) || 50,
+    rate: Number(value.rate != null ? value.rate : 0) || 0,
+    announceTurnEnd: value.announceTurnEnd === true,
+    announceCommandDone: value.announceCommandDone === true,
+    announceGoalChange: value.announceGoalChange === true,
+    announceToolErrors: value.announceToolErrors === true,
+    announceTodoWrite: value.announceTodoWrite === true,
+  }
+}
+
+/**
+ * Build the settings schema + entry for installSettingsSection. Best-effort:
+ * any failure (missing peer packages) returns null and the plugin keeps the
+ * patch config. The registration itself happens on a timer tick in apply.
+ */
+function buildSettingsNamespace(ctx, patch) {
   try {
-    z = require('@deepseek-ai/schemastery')
-    // resolve the ESM package's real file path through CJS resolution (honors
-    // upward node_modules walk and NODE_PATH), then import() that path — a bare
-    // specifier import() would only resolve from this file's own location.
-    const { createRequire } = require('module')
-    const resolved = createRequire(__filename).resolve('@deepseek-ai/dsh-settings')
-    settingsModuleUrl = require('url').pathToFileURL(resolved).href
+    const profileRequire = createRequire(ctx.baseUrl || __filename)
+    const z = profileRequire('@deepseek-ai/schemastery')
+    const schema = z.object({
+      enabled: z.boolean().default(true),
+      automaticSpeech: z.boolean().default(true),
+      cleanMarkdownFormatting: z.boolean().default(true),
+      readInlineCode: z.boolean().default(true),
+      codeBlocks: z.union(['all', 'smart', 'replace']).default('smart'),
+      codeBlockMaxChars: z.natural().default(300),
+      codeBlockReplacementText: z.string().default('You can see the code in our history.'),
+      queueAllMessages: z.boolean().default(false),
+      throttleMs: z.natural().default(1500),
+      engine: z.string().default(''),
+      announceApprovals: z.boolean().default(true),
+      announceQuestions: z.boolean().default(true),
+      stripApprovalPrefix: z.boolean().default(true),
+      longTextMode: z.union(['message', 'heading']).default('message'),
+      longTextMessage: z.string().default('本次播报内容较长，请自行阅读。'),
+      maxChars: z.natural().default(DEFAULT_MAX_CHARS),
+      volume: z.natural().default(50),
+      rate: z.number().default(0),
+      announceTurnEnd: z.boolean().default(false),
+      announceCommandDone: z.boolean().default(false),
+      announceGoalChange: z.boolean().default(false),
+      announceToolErrors: z.boolean().default(false),
+      announceTodoWrite: z.boolean().default(false),
+    })
+    return { schema, entry: { ...SCHEMA_DEFAULTS, ...(patch || {}) } }
   } catch (e) {
     log('settings 依赖不可用，跳过 settings namespace 注册:', e && e.message)
-    return
+    return null
   }
-  const schema = z.object({
-    enabled: z.boolean().default(SCHEMA_DEFAULTS.enabled),
-    throttleMs: z.number().default(SCHEMA_DEFAULTS.throttleMs),
-    engine: z.string().default(SCHEMA_DEFAULTS.engine),
-    announceApprovals: z.boolean().default(SCHEMA_DEFAULTS.announceApprovals),
-    announceQuestions: z.boolean().default(SCHEMA_DEFAULTS.announceQuestions),
-    stripApprovalPrefix: z.boolean().default(SCHEMA_DEFAULTS.stripApprovalPrefix),
-    longTextMode: z.union([z.const('message'), z.const('heading')]).default(SCHEMA_DEFAULTS.longTextMode),
-    longTextMessage: z.string().default(SCHEMA_DEFAULTS.longTextMessage),
-    maxChars: z.number().default(SCHEMA_DEFAULTS.maxChars),
-    volume: z.number().default(SCHEMA_DEFAULTS.volume),
-    rate: z.number().default(SCHEMA_DEFAULTS.rate),
-    announceTurnEnd: z.boolean().default(SCHEMA_DEFAULTS.announceTurnEnd),
-    announceCommandDone: z.boolean().default(SCHEMA_DEFAULTS.announceCommandDone),
-    announceGoalChange: z.boolean().default(SCHEMA_DEFAULTS.announceGoalChange),
-    announceToolErrors: z.boolean().default(SCHEMA_DEFAULTS.announceToolErrors),
-    announceTodoWrite: z.boolean().default(SCHEMA_DEFAULTS.announceTodoWrite),
-  })
-  import(settingsModuleUrl).then(({ installSettingsSection }) => {
-    const entry = { ...SCHEMA_DEFAULTS, ...(patch || {}) }
-    let source = () => entry
-    installSettingsSection(ctx, SETTINGS_NS, schema, entry, {
-      setSource: (current) => { source = current },
-      onChange: () => {
-        try {
-          const next = source()
-          // engine 是路径覆盖：空串要重新自动解析，不能直接覆盖已解析的绝对路径
-          Object.assign(cfg, next, { engine: resolveEngine(next.engine || '') })
-          log('settings 变更已应用; cfg=', JSON.stringify(cfg))
-        } catch (e) {
-          log('settings 变更应用失败:', e && e.message)
-        }
-      },
-    })
-  }).catch((e) => {
-    log('dsh-settings 不可用，跳过 settings namespace 注册:', e && e.message)
-  })
 }
 
 module.exports = {
   apply(ctx, config) {
     config = config || {}
-    // resolved settings: config > default
-    const cfg = {
-      enabled: config.enabled !== false,
-      throttleMs: Number(config.throttleMs != null ? config.throttleMs : SCHEMA_DEFAULTS.throttleMs) || SCHEMA_DEFAULTS.throttleMs,
-      engine: resolveEngine(config.engine || ''),
-      announceApprovals: config.announceApprovals !== false,
-      announceQuestions: config.announceQuestions !== false,
-      stripApprovalPrefix: config.stripApprovalPrefix !== false,
-      longTextMode: config.longTextMode || SCHEMA_DEFAULTS.longTextMode,
-      longTextMessage: config.longTextMessage || SCHEMA_DEFAULTS.longTextMessage,
-      maxChars: Number(config.maxChars != null ? config.maxChars : SCHEMA_DEFAULTS.maxChars) || SCHEMA_DEFAULTS.maxChars,
-      volume: Number(config.volume != null ? config.volume : SCHEMA_DEFAULTS.volume) || SCHEMA_DEFAULTS.volume,
-      rate: Number(config.rate != null ? config.rate : SCHEMA_DEFAULTS.rate) || SCHEMA_DEFAULTS.rate,
-      // optional event announcements (off by default)
-      announceTurnEnd: config.announceTurnEnd === true,
-      announceCommandDone: config.announceCommandDone === true,
-      announceGoalChange: config.announceGoalChange === true,
-      announceToolErrors: config.announceToolErrors === true,
-      announceTodoWrite: config.announceTodoWrite === true,
-    }
-    log('plugin apply 执行（加载成功）; enabled=', cfg.enabled, '; engine=', cfg.engine, '; throttle=', cfg.throttleMs,
-      '; longTextMode=', cfg.longTextMode, '; maxChars=', cfg.maxChars,
-      '; announceTurnEnd=', cfg.announceTurnEnd, '; announceCommandDone=', cfg.announceCommandDone,
-      '; announceGoalChange=', cfg.announceGoalChange, '; announceToolErrors=', cfg.announceToolErrors,
-      '; announceTodoWrite=', cfg.announceTodoWrite)
-    // Best-effort settings integration; cfg is mutated in place on changes.
-    installSettingsNamespace(ctx, cfg, config)
+    let cfg = resolveConfig(config)
 
+    // Register the settings namespace on a timer tick so apply never blocks;
+    // cfg is replaced wholesale on settings changes.
+    ctx.inject(['timer'], timerCtx => {
+      timerCtx.timer.timeout(() => {
+        const prepared = buildSettingsNamespace(ctx, config)
+        if (!prepared) return
+        let settingsModule
+        try {
+          const profileRequire = createRequire(ctx.baseUrl || __filename)
+          settingsModule = profileRequire('@deepseek-ai/dsh-settings')
+        } catch (e) {
+          log('dsh-settings 不可用，跳过 settings namespace 注册:', e && e.message)
+          return
+        }
+        // Keep a live source getter: installSettingsSection passes the resolved
+        // scope thunk to setSource, and onChange must re-derive cfg from it
+        // (installSettingsSection only calls setSource on attach/detach).
+        let settingsSource = () => prepared.entry
+        settingsModule.installSettingsSection(ctx, settingsModule.settingsNamespace(SETTINGS_NS), prepared.schema, prepared.entry, {
+          setSource: source => { settingsSource = source; cfg = resolveConfig(source()) },
+          onChange: () => {
+            try { cfg = resolveConfig(settingsSource()) } catch (e) { log('settings 变更应用失败:', e && e.message) }
+            log('settings 变更已应用; cfg=', JSON.stringify(cfg))
+          },
+        })
+      }, 0)
+    })
+
+    // ---- host-owned FIFO speech queue + WebSocket state sync (PR #2) ----
+    let activeSpeech = null
+    let speechToken = 0
+    let replacement = null
+    const speechQueue = []
+    const speechSockets = new Set()
+    const speechWss = new WebSocketServer({ noServer: true })
+
+    function state() {
+      const item = activeSpeech && activeSpeech.item
+      return {
+        type: 'speech-state',
+        speaking: item !== undefined && item !== null,
+        sessionId: item ? item.sessionId : null,
+        turn: item ? item.turn : null,
+        messageId: item ? item.messageId : null,
+        source: item ? item.source : null,
+        queueLength: speechQueue.length,
+      }
+    }
+    function publishState() {
+      const payload = JSON.stringify(state())
+      for (const socket of speechSockets) {
+        if (socket.readyState === WebSocket.OPEN) {
+          try { socket.send(payload) } catch (e) { speechSockets.delete(socket) }
+        }
+      }
+    }
+    function removeTemp(tmp) { try { fs.unlinkSync(tmp) } catch (e) { /* already removed */ } }
+
+    function startOne(item) {
+      // master switch: nothing is ever spoken while disabled
+      if (!cfg.enabled) { log('总开关关闭，跳过播报（文本长度:', item.text.length, '）'); return false }
+      if (!item || !item.text.trim() || activeSpeech) return false
+      const tmp = path.join(os.tmpdir(), `dsh-speech-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`)
+      try { fs.writeFileSync(tmp, item.text, 'utf8') } catch (e) { log('write temp failed:', e.message); return false }
+      log('speech start', item.source, item.sessionId || '-', item.turn == null ? '-' : item.turn, item.messageId || '-', item.text.slice(0, 80))
+      let child
+      if (process.platform === 'darwin') {
+        const args = ['-f', tmp, '-m', String(cfg.maxChars), '-M', cfg.longTextMode, '-l', cfg.longTextMessage, '-C', cfg.cleanMarkdownFormatting ? '1' : '0', '-I', cfg.readInlineCode ? '1' : '0', '-B', cfg.codeBlocks, '-K', String(cfg.codeBlockMaxChars), '-R', cfg.codeBlockReplacementText]
+        if (cfg.rate > 0) args.push('-r', String(cfg.rate))
+        child = spawn('/bin/bash', [cfg.engine].concat(args), { detached: true, stdio: 'ignore' })
+      } else {
+        child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', cfg.engine, '-File', tmp, '-Volume', String(cfg.volume), '-Rate', String(cfg.rate > 0 ? cfg.rate : 1), '-MaxChars', String(cfg.maxChars), '-LongTextMode', cfg.longTextMode, '-LongTextMessage', cfg.longTextMessage, '-CleanMarkdownFormatting', cfg.cleanMarkdownFormatting ? '1' : '0', '-ReadInlineCode', cfg.readInlineCode ? '1' : '0', '-CodeBlocks', cfg.codeBlocks, '-CodeBlockMaxChars', String(cfg.codeBlockMaxChars), '-CodeBlockReplacementText', cfg.codeBlockReplacementText], { windowsHide: true, stdio: 'ignore' })
+      }
+      const token = ++speechToken
+      activeSpeech = { process: child, tmp, token, item }
+      publishState()
+      const settle = () => {
+        removeTemp(tmp)
+        if (!activeSpeech || activeSpeech.token !== token) return
+        activeSpeech = null
+        publishState()
+        if (replacement) {
+          const next = replacement
+          replacement = null
+          startOne(next)
+        } else {
+          startNext()
+        }
+      }
+      child.once('exit', settle)
+      child.once('error', settle)
+      return true
+    }
+    function startNext() {
+      if (activeSpeech || replacement) return
+      const item = speechQueue.shift()
+      if (!item) { publishState(); return }
+      publishState()
+      startOne(item)
+    }
+    function enqueue(item) {
+      if (!item || !item.text || !item.text.trim()) return
+      speechQueue.push(item)
+      publishState()
+      startNext()
+    }
+    function stopActive() {
+      const active = activeSpeech
+      if (!active) return false
+      try {
+        if (process.platform === 'darwin' && active.process.pid) process.kill(-active.process.pid, 'SIGTERM')
+        else active.process.kill()
+      } catch (e) { log('stop speech failed:', e.message) }
+      return true
+    }
+    function clearAndStop() {
+      speechQueue.length = 0
+      publishState()
+      return stopActive()
+    }
+    function replaceWith(item) {
+      speechQueue.length = 0
+      replacement = item
+      publishState()
+      if (!activeSpeech) {
+        const next = replacement
+        replacement = null
+        startOne(next)
+        return
+      }
+      stopActive()
+    }
+    function visibleText(message) {
+      if (!message) return ''
+      if (typeof message.content === 'string') return message.content
+      if (!Array.isArray(message.content)) return ''
+      return message.content.filter(block => block && block.type === 'text' && typeof block.text === 'string').map(block => block.text).join('')
+    }
+    function hostItem(source, session, event, text, messageId) {
+      const sessionValue = session && (session.id != null ? session.id : session.sessionId)
+      return {
+        source,
+        sessionId: sessionValue != null ? String(sessionValue) : null,
+        turn: event && event.data && Number.isFinite(event.data.turn) ? event.data.turn : null,
+        messageId: messageId == null ? null : String(messageId),
+        text,
+      }
+    }
+
+    // ---- WebSocket + control route (PR #2) ----
+    ctx.inject(['webServer'], webCtx => {
+      webCtx.effect(() => webCtx.webServer.registerUpgrade({
+        path: '/dsh-speak/ws',
+        handler: (req, socket, head) => speechWss.handleUpgrade(req, socket, head, client => {
+          speechSockets.add(client)
+          client.once('close', () => speechSockets.delete(client))
+          client.once('error', () => speechSockets.delete(client))
+          try { client.send(JSON.stringify(state())) } catch (e) { speechSockets.delete(client) }
+        }),
+      }), 'dsh-speak speech-state websocket')
+      webCtx.effect(() => webCtx.webServer.register({
+        kind: 'exact', path: '/dsh-speak/control', handler: async (req, res) => {
+          const reply = (status, value) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)) }
+          if (req.method !== 'POST' || !String(req.headers['content-type'] || '').startsWith('application/json')) { reply(405, { error: 'POST application/json required' }); return }
+          try {
+            const chunks = []; let size = 0
+            for await (const chunk of req) { size += chunk.length; if (size > 1024 * 1024) throw new Error('request too large'); chunks.push(chunk) }
+            const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
+            if (body.action === 'status') { reply(200, state()); return }
+            if (body.action === 'stop') {
+              replacement = null
+              clearAndStop()
+              reply(200, state())
+              return
+            }
+            if (body.action !== 'play' || typeof body.text !== 'string' || !body.text.trim()) { reply(400, { error: 'invalid control request' }); return }
+            replaceWith({ source: 'manual', sessionId: body.sessionId == null ? null : String(body.sessionId), turn: Number.isFinite(body.turn) ? body.turn : null, messageId: body.messageId == null ? null : String(body.messageId), text: body.text })
+            reply(200, state())
+          } catch (e) { reply(e.message === 'request too large' ? 413 : 400, { error: e.message }) }
+        },
+      }), 'dsh-speak replay control route')
+    })
+
+    ctx.effect(() => () => {
+      replacement = null
+      clearAndStop()
+      for (const socket of speechSockets) { try { socket.close() } catch (e) { /* closed */ } }
+      speechSockets.clear()
+      try { speechWss.close() } catch (e) { /* closed */ }
+    }, 'dsh-speak speech cleanup')
+
+    // ---- session event handling ----
     let timer = null
     let pendingText = ''
-
-    /** cancel a pending announcement (called when a tool-call round arrives) */
+    /** 当前回合内最后一条助手消息文本（turn/end 兜底播报用） */
+    let lastText = ''
+    /** 已通过节流播报过的文本（防止 turn/end 兜底重复播报） */
+    let lastSpokenText = ''
+    /** 最后一条助手消息 id（兜底播报时带上） */
+    let lastMessageId = null
+    /** cancel a pending throttled announcement (default mode, tool-call round) */
     function cancelPending() {
       if (timer) { clearTimeout(timer); timer = null }
       pendingText = ''
     }
 
-    function speak(text) {
-      // 总开关：关闭后不触发任何播报（最终回复 / 审批 / 提问 / 可选事件）
-      if (!cfg.enabled) {
-        log('总开关关闭，跳过播报（文本长度:', text ? text.length : 0, '）')
-        return
-      }
-      log('speak 调用, 文本长度:', text ? text.length : 0)
-      if (!text || !text.trim()) return
-      const tmp = path.join(os.tmpdir(), `dsh-speech-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`)
-      try {
-        fs.writeFileSync(tmp, text, 'utf8')
-      } catch (e) {
-        log('写临时文件失败:', e.message)
-        return
-      }
-      let ps
-      if (process.platform === 'darwin') {
-        // macOS: run the say-based engine through bash
-        const args = ['-f', tmp, '-m', String(cfg.maxChars), '-M', cfg.longTextMode, '-l', cfg.longTextMessage]
-        if (cfg.rate > 0) args.push('-r', String(cfg.rate))
-        ps = spawn('/bin/bash', [cfg.engine].concat(args), { stdio: 'ignore' })
-        log('spawn bash (macOS engine) 已发起:', args.join(' '))
-      } else {
-        ps = spawn('powershell.exe',
-          ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', cfg.engine,
-            '-File', tmp,
-            '-Volume', String(cfg.volume),
-            '-Rate', String(cfg.rate > 0 ? cfg.rate : 1),
-            '-MaxChars', String(cfg.maxChars),
-            '-LongTextMode', cfg.longTextMode,
-            '-LongTextMessage', cfg.longTextMessage],
-          { windowsHide: true, stdio: 'ignore' })
-        log('spawn powershell 已发起')
-      }
-      ps.on('exit', (code) => { log('播报进程退出 code=', code); try { fs.unlinkSync(tmp) } catch (e) { /* 清理 */ } })
-      ps.on('error', (e) => { log('播报进程 error:', e.message); try { fs.unlinkSync(tmp) } catch (e2) { /* 清理 */ } })
-    }
-
-    // ---------- optional event announcements ----------
-    /** turn/end: "第 N 轮对话完成" (reason-aware, kept short) */
-    function announceTurnEnd(data) {
-      const turn = data && data.turn
-      const kind = data && data.reason && data.reason.kind
-      const prefix = turn != null ? `第 ${turn} 轮对话` : '本轮对话'
-      switch (kind) {
-        case 'completed': return prefix + '完成'
-        case 'aborted': case 'interrupted': return prefix + '中断'
-        case 'blocked': return prefix + '被阻塞'
-        case 'error': case 'max-tokens': return prefix + '异常结束'
-        default: return prefix + '结束'
-      }
-    }
-    /** command/done: "命令执行完成/失败" */
-    function announceCommandDone(data) {
-      const kind = data && data.kind
-      return kind === 'error' ? '命令执行失败' : '命令执行完成'
-    }
-    /** goal/change: operation + objective (truncated) */
-    function announceGoalChange(data) {
-      const op = data && data.operation
-      const objective = data && data.goal && data.goal.objective
-      const label = { create: '已创建目标', edit: '目标已更新', complete: '目标已完成', pause: '目标已暂停', resume: '目标已恢复', block: '目标已阻塞', clear: '目标已清除' }[op] || '目标状态变化'
-      if (objective && (op === 'create' || op === 'edit' || op === 'complete')) {
-        const head = objective.replace(/\s+/g, ' ').trim().slice(0, 40)
-        return `${label}：${head}`
-      }
-      return label
-    }
-    /** tool/result: only when the tool reported an error */
-    function announceToolError(data) {
-      const err = data && data.error
-      if (!err) return ''
-      const detail = (err.message || err.code || '工具调用出错').replace(/\s+/g, ' ').trim().slice(0, 60)
-      return `工具调用出错：${detail}`
-    }
-    /** todo/write: "待办已更新：n/m 完成" */
-    function announceTodoWrite(data) {
-      const todos = Array.isArray(data && data.todos) ? data.todos : []
-      const done = todos.filter((t) => t && t.status === 'completed').length
-      return `待办已更新：${done}/${todos.length} 完成`
-    }
-
     ctx.on('session/event', (session, event) => {
       try {
         const type = event && event.type
-        // noise filter: assistant/chunk (streaming chunks) is not recorded
         if (type !== 'assistant/chunk') {
           log('事件 type=', type, 'surfaceOp=', event && event.surfaceOp, 'seq=', event && event.seq)
         }
-        // tool-call round: a call to ask_user_question announces the parsed
-        // question (title + mode + options); any other tool call cancels the
-        // pending announcement (that round's assistant text is narration)
+        // 新回合开始：清空上一回合的兜底状态，避免跨回合残留
+        if (type === 'turn/start') {
+          cancelPending()
+          lastText = ''
+          lastSpokenText = ''
+          lastMessageId = null
+          return
+        }
+        // tool-call round: ask_user_question announces the parsed question; any
+        // other tool call cancels the pending throttled narration
         if (type === 'tool/call') {
-          const toolName = event.data && event.data.name
-          if (toolName === 'ask_user_question' && cfg.announceQuestions) {
-            let spoken = ''
+          if (event.data && event.data.name === 'ask_user_question' && cfg.announceQuestions) {
+            let text = ''
             try {
-              const args = JSON.parse((event.data && event.data.arguments) || '{}')
-              const qs = Array.isArray(args.questions) ? args.questions : []
-              spoken = qs.map((q) => {
-                const mode = q.multi_select ? '多选' : '单选'
-                const labels = Array.isArray(q.options)
-                  ? q.options.map((o) => o.label).filter(Boolean).join('、')
-                  : ''
-                return (q.question || '') + '（' + mode + '）' + (labels ? '，选项：' + labels : '')
+              const args = JSON.parse(event.data.arguments || '{}')
+              text = (Array.isArray(args.questions) ? args.questions : []).map(question => {
+                const mode = question.multi_select ? '多选' : '单选'
+                const labels = Array.isArray(question.options) ? question.options.map(option => option.label).filter(Boolean).join('、') : ''
+                return `${question.question || ''}（${mode}）${labels ? '，选项：' + labels : ''}`
               }).filter(Boolean).join('；')
-            } catch (e) { /* arguments 解析失败则回退原逻辑 */ }
-            if (spoken) {
+            } catch (e) { /* ignore malformed arguments */ }
+            if (text) {
               cancelPending()
-              log('提问播报:', spoken.slice(0, 120))
-              speak(spoken)
-            } else {
-              log('提问工具调用（ask_user_question）— 保留待播报文本')
+              // 问题已单独播报，标记当前最后文本为已播，避免 turn/end 兜底重复
+              lastSpokenText = lastText
+              enqueue(hostItem('question', session, event, text, null))
             }
             return
           }
           cancelPending()
           return
         }
-        // approval requested: announce it right away (time-sensitive), using
-        // the approval reason if present
+        // approval requested: announce right away
         if (type === 'approval/asked' && cfg.announceApprovals) {
           cancelPending()
-          let reason = (event.data && event.data.reason) || ''
-          if (cfg.stripApprovalPrefix) {
-            // strip the fixed English template prefix (e.g. "escalate sandbox
-            // to danger-full-access: "), keep the human explanation
-            reason = reason.replace(/^escalate sandbox to danger-full-access\s*:\s*/i, '').trim()
-          }
-          const text = reason || '需要你的审批，请查看界面。'
-          log('审批请求，播报:', text.slice(0, 60))
-          speak(text)
+          let reason = String((event.data && event.data.reason) || '')
+          if (cfg.stripApprovalPrefix) reason = reason.replace(/^escalate sandbox to danger-full-access\s*:\s*/i, '').trim()
+          enqueue(hostItem('approval', session, event, reason || '需要你的审批，请查看界面。', null))
           return
         }
-        // optional event announcements (off by default)
-        if (type === 'turn/end' && cfg.announceTurnEnd) {
-          const text = announceTurnEnd(event.data)
-          log('回合结束播报:', text)
-          speak(text)
+        // 回合结束：兜底播报最终回复（被工具调用取消的节流文本在此补播，
+        // 已播过的不重复），随后按需播报"第 N 轮对话完成"可选事件
+        if (type === 'turn/end') {
+          if (cfg.automaticSpeech && !cfg.queueAllMessages && lastText && lastText !== lastSpokenText) {
+            const itemText = lastText
+            const itemMessageId = lastMessageId
+            cancelPending()
+            lastText = ''
+            lastSpokenText = itemText
+            enqueue(hostItem('automatic', session, event, itemText, itemMessageId))
+          }
+          if (!cfg.announceTurnEnd) return
+          const data = event.data
+          const prefix = data && data.turn != null ? `第 ${data.turn} 轮对话` : '本轮对话'
+          const kind = data && data.reason && data.reason.kind
+          const text = ({ completed: prefix + '完成', aborted: prefix + '中断', interrupted: prefix + '中断', blocked: prefix + '被阻塞', error: prefix + '异常结束', 'max-tokens': prefix + '异常结束' })[kind] || prefix + '结束'
+          enqueue(hostItem('turn/end', session, event, text, null))
           return
         }
         if (type === 'command/done' && cfg.announceCommandDone) {
-          const text = announceCommandDone(event.data)
-          log('命令完成播报:', text)
-          speak(text)
+          enqueue(hostItem('command/done', session, event, (event.data && event.data.kind) === 'error' ? '命令执行失败' : '命令执行完成', null))
           return
         }
         if (type === 'goal/change' && cfg.announceGoalChange) {
-          const text = announceGoalChange(event.data)
-          log('目标变更播报:', text)
-          speak(text)
+          const data = event.data
+          const objective = data && data.goal && data.goal.objective
+          const label = ({ create: '已创建目标', edit: '目标已更新', complete: '目标已完成', pause: '目标已暂停', resume: '目标已恢复', block: '目标已阻塞', clear: '目标已清除' })[data && data.operation] || '目标状态变化'
+          const text = objective && ['create', 'edit', 'complete'].includes(data.operation) ? `${label}：${objective.replace(/\s+/g, ' ').trim().slice(0, 40)}` : label
+          enqueue(hostItem('goal/change', session, event, text, null))
           return
         }
         if (type === 'tool/result' && cfg.announceToolErrors) {
-          const text = announceToolError(event.data)
-          if (text) {
-            log('工具出错播报:', text)
-            speak(text)
+          const data = event.data
+          const err = data && data.error
+          // 真实错误标记：error 字段（name/code）或 message 内容块 isError === true
+          // （pwsh 等工具失败时没有 error 字段，错误文本在 isError 内容块里）
+          const errText = (Array.isArray(data && data.message && data.message.content) ? data.message.content : [])
+            .filter(block => block && block.isError === true)
+            .map(block => block.text || block.code || '').filter(Boolean).join(' ')
+          if (err || errText) {
+            const detail = (errText || (err && err.code) || (err && err.name) || '工具调用出错').replace(/\s+/g, ' ').trim().slice(0, 60)
+            enqueue(hostItem('tool/result', session, event, `工具调用出错：${detail}`, null))
           }
           return
         }
         if (type === 'todo/write' && cfg.announceTodoWrite) {
-          const text = announceTodoWrite(event.data)
-          log('待办更新播报:', text)
-          speak(text)
+          const todos = Array.isArray(event.data && event.data.todos) ? event.data.todos : []
+          const done = todos.filter(t => t && t.status === 'completed').length
+          enqueue(hostItem('todo/write', session, event, `待办已更新：${done}/${todos.length} 完成`, null))
           return
         }
         if (!event || type !== 'assistant/message') return
         if (event.surfaceOp && event.surfaceOp !== 'append') return
-        // the message object lives at event.data.message (event.data wraps { turn, step, message })
-        const msg = event.data && (event.data.message || event.data)
-        if (!msg) return
-        let text = ''
-        const c = msg.content
-        if (typeof c === 'string') {
-          text = c
-        } else if (Array.isArray(c)) {
-          // only text blocks: reasoning / tool_use blocks are not announced
-          text = c
-            .filter(b => b && b.type === 'text' && typeof b.text === 'string')
-            .map(b => b.text)
-            .join('')
-        }
+        const message = event.data && (event.data.message || event.data)
+        const text = visibleText(message)
         if (!text.trim()) return
-        log('缓存待播报文本长度:', text.length, '前 60:', text.slice(0, 60))
+
+        // queueAllMessages mode (PR #2): enqueue every assistant message now
+        if (cfg.queueAllMessages && cfg.automaticSpeech) {
+          enqueue(hostItem('automatic', session, event, text, message && message.id))
+          return
+        }
+        // default mode: throttle/merge the final reply; a tool/call cancels it,
+        // and turn/end 兜底补播 lastText（见上方 turn/end 分支）
+        cancelPending()
         pendingText = text
-        if (timer) clearTimeout(timer)
-        // throttle: merge multi-step messages of one reply; a tool/call in
-        // between cancels the announcement
+        lastText = text
+        lastMessageId = message && message.id ? String(message.id) : null
         timer = setTimeout(() => {
-          speak(pendingText)
+          if (!pendingText) return
+          const itemText = pendingText
           pendingText = ''
           timer = null
+          lastSpokenText = itemText
+          enqueue(hostItem('automatic', session, event, itemText, lastMessageId))
         }, cfg.throttleMs)
-      } catch (e) {
-        log('事件处理异常:', e.message)
-      }
+      } catch (e) { log('session event speech error:', e.message) }
     })
   },
 }

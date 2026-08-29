@@ -1,6 +1,6 @@
 {
   "name": "dsh-speak",
-  "version": "1.6.0",
+  "version": "1.7.0-rc.1",
   "description": "Make your AI harness speak — voice announcements for DSH and other AI coding harnesses (Windows SAPI5 + macOS system voices)",
   "main": "adapters/dsh/speech-hook.js",
   "exports": {
@@ -27,10 +27,12 @@
     "client": {
       "platform": "web",
       "inject": [
-        "@deepseek-ai/dsh-client-connection",
-        "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-runtime",
-        "@deepseek-ai/dsh-client-ui-settings"
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-runtime"
+      ],
+      "external": [
+        "@deepseek-ai/dsh-client-ui-primitives"
       ]
     }
   },
@@ -52,6 +54,9 @@
   ],
   "scripts": {
     "prepublishOnly": "node --check adapters/dsh/speech-hook.js && node --check client/client.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
   },
   "engines": {
     "node": ">=18"

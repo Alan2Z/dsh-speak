@@ -31,11 +31,12 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
 
 非目标（当前阶段）：
 
-- Windows 引擎（`speak.ps1`）+ macOS 引擎（`speak.sh`，系统自带 `say`）均已
-  **正式支持**（macOS 自 1.2.0 起随 npm 包分发）。不支持 Linux/无头 TTS。
+- 不支持 Linux/无头 TTS（Windows 用 `speak.ps1` + SAPI5；macOS 用 `speak.sh`
+  + 系统 `say`，macOS 引擎自 1.2.0 起随 npm 包分发）。
 - 在仓库内打包 NaturalVoiceSAPIAdapter（仅 Windows 10 需要）或语音数据——
   它们是前置依赖，不打进仓库。
-- 流式/队列播放、按音色输出音频文件、非中文音色管理。
+- 按音色输出音频文件、非中文音色管理（语音**播放队列**已在 1.7.0 实现——
+  见 §3.2 的 host FIFO 队列）。
 
 ## 3. 架构
 
@@ -105,23 +106,29 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
 - 监听 `session/event`；
 - 过滤 `assistant/message` 且 `surfaceOp == 'append'` 的事件；
 - 只提取 `text` 内容块（reasoning / tool_use 块跳过）；
-- 缓冲文本并启动节流定时器（默认 1500 ms）以合并同一回复的多步消息；
-- `tool/call` 事件会**取消**待播报——该轮 assistant 文本是过程旁白，不是最终回复；
-- 触发时：把文本写入临时文件，`spawn` 出
-  `powershell.exe -File <engine> -File <tmp>`，带 `windowsHide` + `stdio: 'ignore'`，
-  绝不阻塞 harness；退出后删除临时文件。
+- 默认模式：缓冲文本并启动节流定时器（默认 1500 ms）以合并同一回复的多步消息，
+  `tool/call` 事件会**取消**待播报（该轮 assistant 文本是过程旁白），但
+  **`turn/end` 会在回合结束时兜底补播最终回复**（带工具调用的回复也能听到）；
+- **host 语音队列**（1.7.0，源自 PR #2）：所有播报（最终回复、审批、提问、
+  可选事件、手动重播）统一进入 FIFO 队列，**同一时间只运行一个语音进程**，
+  读完自动播下一条；`/dsh-speak/control` POST 路由（play/stop/status）和
+  `/dsh-speak/ws` WebSocket 广播权威播放状态（正在读哪条、队列长度）。
+- **每条消息重播**（1.7.0）：assistant 消息操作栏的 🔊 按钮调 control 路由
+  重播该回合；语音执行完全由 host 拥有（浏览器关掉也继续）。
+- **`queueAllMessages` 开关**（1.7.0，默认关）：关 = 默认节流最终回复 + 可选
+  事件；开 = 每条 assistant 消息立即入队朗读（中间消息也读）。
 - **可选事件播报**（1.6.0，默认全关）：`turn/end`、`command/done`、
-  `goal/change`、`tool/result`（出错时）、`todo/write` 各自独立开关，触发时
-  立即播报固定短语（见 §5）。
-- **settings namespace 注册**（1.6.0）：插件在 apply 时调用
-  `installSettingsSection(ctx, 'dsh-speak', schema, patchConfig, hooks)`（来自
-  `@deepseek-ai/dsh-settings`，通过动态 `import()` 加载），把配置解析为
-  schema 默认 → patch `config` → UI 用户设置三层；`onChange` 时把解析值写回
-  内部可变 `cfg` 对象。浏览器端由 `client/client.js` 提供配置卡片。若宿主没有
-  settings 服务（dsh < 0.1.0-rc.7 或未挂载 provider），注册静默跳过，插件
-  完全按 patch `config` 工作——向后兼容。
+  `goal/change`、`tool/result`（出错时）、`todo/write` 各自独立开关（见 §5）。
+- **settings namespace 注册**（1.6.0）：apply 后在一个 timer tick 里调用
+  `installSettingsSection(ctx, 'dsh-speak', schema, patchConfig, hooks)`，配置
+  解析为 schema 默认 → patch `config` → UI 用户设置三层。`onChange` 时通过
+  `settingsSource()` 重新解析 cfg（注意：`installSettingsSection` 只在
+  attach/detach 时调 `setSource`，变更时需自己在 `onChange` 里重读 source）。
+  若宿主没有 settings 服务（dsh < 0.1.0-rc.7 或未挂载 provider），注册静默
+  跳过，插件完全按 patch `config` 工作——向后兼容。
 
-注册片段（`install.ps1` 也会自动完成）：
+注册片段（`install.ps1` 也会自动完成；npm 安装用裸包名 `'dsh-speak'` 即可，
+这是文件安装方式用的路径）：
 
 ```yaml
 # ~/.dsh/profiles/web/cordis.patch.yml
@@ -137,17 +144,25 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
 ### 3.4 DSH 浏览器端 — `client/client.js`
 
 一个 DSH client bundle（`window.__ModuleLoader__.load({ id: 'dsh-speak',
-factory })`），在「设置 → 插件 → 插件配置」里注册一张配置卡片：
+factory })`），注册两条 UI：
+
+- **每条消息的 Speak 按钮**（1.7.0，源自 PR #2）：注册进
+  `conversation.chat.assistant-actions` slot（消息操作栏）。点击 🔊 调
+  `/dsh-speak/control` 重播该回合，再点停止，点另一条切换；按钮状态（播放中/
+  暂停）由 `/dsh-speak/ws` WebSocket 的 host 权威状态推导（session + turn
+  身份匹配）。
+- **设置 → dsh-speak 设置独立设置页**（1.7.0）：注册进 `settings.section` slot。
+  用 `@deepseek-ai/dsh-client-ui-primitives` 的 Button/DisclosureRow/Input
+  绘制（Toggle/Options/SettingInput 组件），所有配置项（总开关、自动朗读、
+  queueAllMessages、Markdown 清洗、代码块、maxChars、longTextMode、固定提示语、
+  审批/提问、5 类可选事件）都通过 `settingsScope.bind({ namespace: 'dsh-speak' })`
+  读写。
 
 - 包通过 `package.json` 的 `dsh.client: { platform: 'web' }` +
   `exports['./client']` 声明浏览器端；DSH 的 client-modules 扫描到后自动加载。
-- 卡片按 `settings.plugin.item` slot 注册，key 为 `dsh-speak`（与 host 端
-  namespace 一致）；只有 host 端注册了该 namespace 时 UI 才会显示它。
-- 卡片通过 client `settingsScope.bind({ namespace: 'dsh-speak' })` 读写配置：
-  显示解析值、标注"已覆盖"字段、保存时逐字段 `set`/`unset`。
-- **刻意手写、零构建**：只用平台 seed 模块（`react`、slots/locale/settingsScope
-  服务），不 import 官方包内部组件（client bundle-purity gate 禁止），与构建
-  出来的 bundle 契约一致。
+- **刻意手写、零构建**：只用平台 seed 模块 + 官方 primitives（bundle-purity
+  gate 允许用 primitives，禁止 import 官方包内部组件），与构建出来的 bundle
+  契约一致。
 
 ### 3.3 Claude Code 适配层 — `adapters/claude-code/stop-hook.ps1`
 
@@ -161,7 +176,7 @@ Claude Code *确实*有 Stop hook。hook JSON（含 `transcript_path`）从 stdi
 | assistant 轮次 / 事件            | 是否播报 |
 | -------------------------------- | -------- |
 | 最终文本回复，无工具调用         | ✅ 节流后播报 |
-| 文本 + tool/call(s)              | ❌（取消——旁白） |
+| 文本 + tool/call(s)              | 🟡 节流被取消（中间轮次）；**回合结束时兜底补播最终回复** |
 | 文本 + `ask_user_question` 调用  | ✅ 保留提问文本并播报 |
 | `approval/asked`（审批请求）     | ✅ 立即播报（审批原因，否则固定提示语） |
 | 只有 reasoning，无文本           | ❌（无 text 块） |
@@ -169,8 +184,11 @@ Claude Code *确实*有 Stop hook。hook JSON（含 `transcript_path`）从 stdi
 | `turn/end`（回合结束）           | 🟡 默认关；开则播报"第 N 轮对话完成/中断/异常结束" |
 | `command/done`（命令完成）       | 🟡 默认关；开则播报"命令执行完成/失败" |
 | `goal/change`（目标变更）        | 🟡 默认关；开则播报"已创建目标/目标已完成…（前 40 字）" |
-| `tool/result`（工具结果）        | 🟡 默认关；开则仅当带 `error` 时播报错误摘要 |
+| `tool/result`（工具结果）        | 🟡 默认关；开则仅当带 `error` 或 `isError` 内容块时播报错误摘要 |
 | `todo/write`（待办更新）         | 🟡 默认关；开则播报"待办已更新：n/m 完成" |
+
+| `assistant/message`（queueAllMessages 开）| ✅ 每条立即入队（中间消息也读） |
+| 手动重播（每条消息 🔊 按钮）         | ✅ 清队列 → 停当前 → 读该回合 |
 
 ## 5. 配置参考
 
@@ -182,35 +200,50 @@ Claude Code *确实*有 Stop hook。hook JSON（含 `transcript_path`）从 stdi
 | `-File` | `''` | 要读取的 UTF-8 文件 |
 | `-Volume` | `50` | 0–100 |
 | `-Rate` | `1` | 语速（SAPI 刻度） |
-| `-MaxChars` | `300` | 超过此长度时替换为 `LongTextMessage` |
+| `-MaxChars` | 平台相关 | 超过此长度时替换为 `LongTextMessage`（macOS 默认 0 = 不限） |
 | `-LongTextMessage` | `本次播报内容较长，请自行阅读。` | 超长文本时改念这句 |
 | `-LongTextMode` | `message` | `message`（固定提示语）\| `heading`（念最大字号 markdown 标题） |
+| `-CleanMarkdownFormatting` | `true` | Markdown 转自然语音（保留链接文字去 URL） |
+| `-ReadInlineCode` | `true` | 朗读行内代码（去掉反引号） |
+| `-CodeBlocks` | `smart` | `all` \| `smart` \| `replace`（围栏代码块） |
+| `-CodeBlockMaxChars` | `300` | `smart` 模式的代码块字数上限 |
+| `-CodeBlockReplacementText` | `You can see the code in our history.` | `replace` 时的替代文本 |
 
-### DSH 插件（profile `config`；1.6.0 起同样可在 Web UI 的插件配置卡片里改）
+### DSH 插件（profile `config`；1.7.0 起同样可在 Web UI 的 dsh-speak 设置页里改）
 
 ```yaml
 config:
+  enabled: true                # 总开关
+  automaticSpeech: true        # 自动朗读最终回复
+  queueAllMessages: false      # true = 所有 assistant 消息立即入队
+  cleanMarkdownFormatting: true
+  readInlineCode: true
+  codeBlocks: smart            # all | smart | replace
+  codeBlockMaxChars: 300
+  codeBlockReplacementText: 'You can see the code in our history.'
   throttleMs: 1500
-  engine: ''                 # '' = 自动解析
+  engine: ''                   # '' = 自动解析
   announceApprovals: true
   announceQuestions: true
   stripApprovalPrefix: true
-  longTextMode: message      # message | heading
-  maxChars: 300
-  volume: 50                 # 仅 Windows
-  rate: 0                    # 0 = 引擎默认
+  longTextMode: message        # message | heading
+  longTextMessage: '本次播报内容较长，请自行阅读。'
+  maxChars: 300                # macOS 默认 0 = 不限
+  volume: 50                   # 仅 Windows
+  rate: 0                      # 0 = 引擎默认
   # —— 可选事件播报（默认全关）——
   announceTurnEnd: false     # turn/end
   announceCommandDone: false # command/done
   announceGoalChange: false  # goal/change
-  announceToolErrors: false  # tool/result 带 error 时
+  announceToolErrors: false  # tool/result 带 error 或 isError 块时
   announceTodoWrite: false   # todo/write
 ```
 
 配置解析顺序：schema 默认值 → patch `config`（base）→ UI 用户设置（user 层）。
-浏览器端卡片（`client/client.js`）与 patch YAML 读写同一个 settings 文档。
+浏览器端 dsh-speak 设置页（`client/client.js`）与 patch YAML 读写同一个 settings
+文档。平台差异：`maxChars` macOS 默认 0（`say` 无上限）、Windows 默认 300。
 
-完整指南：docs/CUSTOMIZATION.zh-CN.md。
+完整配置指南见 README 的"配置"一节。
 
 ## 6. 踩坑记录（来之不易；不要随意"修复"）
 

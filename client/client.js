@@ -1,538 +1,276 @@
-// client.js — dsh-speak browser half: a settings card for 设置 → 插件 → 插件配置
+// client.js — dsh-speak browser half: per-message Speak/Stop/Replay button,
+// speech-state WebSocket, and the native dsh-speak settings page.
 // ==============================================================================
-// Registers a card into the `settings.plugin.item` slot keyed by the `dsh-speak`
-// settings namespace (registered Host-side by adapters/dsh/speech-hook.js via
-// installSettingsSection). The card reads/writes the namespace through the
-// client `settingsScope` service, so every option the Host plugin honors is
-// visible and editable here — no hand-edited YAML needed.
+// Merged bundle (1.7.0): victorwads' PR #2 UI (message action + Settings page,
+// styled with @deepseek-ai/dsh-client-ui-primitives) plus the dsh-speak-specific
+// options (master switch, optional event announcements, editable fixed prompt,
+// queue-all-messages mode). All UI copy is bilingual (zh/en) via the DSH locale
+// service; the settings page entry is "dsh-speak 设置 / dsh-speak settings".
 //
-// This file is a DSH client bundle: `window.__ModuleLoader__.load({ id,
-// factory })`. It is deliberately handwritten (no build step) — it only uses
-// the platform seed modules (react, the slots/locale/settingsScope services)
-// and follows the same contract as the built bundles.
+// Host contract (adapters/dsh/speech-hook.js):
+//   * /dsh-speak/control  — POST { action: 'play'|'stop'|'status', ... }
+//   * /dsh-speak/ws       — WebSocket publishing { type: 'speech-state', ... }
+//   * settings namespace 'dsh-speak' (installSettingsSection)
 //
-// Card contract (see dsh-client-ui-settings-plugins):
-//   * a plugin that ships a browser half owns its own card; importing a value
-//     from dsh-client-ui-settings-plugins would fail the client bundle-purity
-//     gate, so all chrome is drawn here
-//   * the card shows the resolved value (user layer over composition base over
-//     schema default), marks overridden fields, and writes through the scope
+// The bundle is deliberately hand-written (no build step) and only uses
+// platform seed modules + official primitives (bundle-purity gate).
 'use strict'
 
 window.__ModuleLoader__.load({
   id: 'dsh-speak',
-  factory: (require) => {
-    var module = { exports: {} }
-    var exports = module.exports
-    Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' })
+  factory: require => {
+    const module = { exports: {} }
+    const React = require('react')
+    const { Button, DisclosureRow, IconPauseOutline16, Input } = require('@deepseek-ai/dsh-client-ui-primitives')
+    const CONTROL_PATH = '/dsh-speak/control'
+    const SOCKET_PATH = '/dsh-speak/ws'
+    const SETTINGS_NAMESPACE = 'dsh-speak'
 
-    let react = require('react')
-    const { createElement: h, useState, useSyncExternalStore } = react
-
-    // settings namespace — must match the Host-side registration
+    // ---- locale copy (zh / en) -------------------------------------------
     const NS = 'dsh-speak'
-    // services this browser plugin needs
-    const inject = ['slots', 'locale']
-
-    // ---------------------------------------------------------------------
-    // locale copy
-    // ---------------------------------------------------------------------
     const zh = {
-      cardTitle: '语音播报',
-      cardDescription: 'dsh-speak — 让 agent 在长任务完成时开口告诉你。',
-      readOnly: '本部署的设置为只读。',
-      unsaved: '未保存',
-      save: '保存',
-      saving: '保存中…',
-      discard: '放弃修改',
-      saveFailed: '本部署没有接受这些值，已保留供你修改。',
-      overridden: '已覆盖',
-      reset: '恢复默认',
-      fieldThrottleMs: '播报延迟（毫秒）',
-      hintThrottleMs: '回复文本等待多久才播报（合并同一回复的多步消息）。',
-      fieldEngine: '引擎路径覆盖',
-      hintEngine: '留空自动解析：包内 engine → ~/.dsh/hooks。',
-      fieldAnnounceApprovals: '播报审批请求',
-      hintAnnounceApprovals: 'agent 等你操作时播"需要你的审批"。',
-      hintDependsOnApprovals: '需先开启「播报审批请求」。',
-      fieldAnnounceQuestions: '播报提问',
-      hintAnnounceQuestions: '播报 ask_user_question 的问题与选项。',
-      fieldStripApprovalPrefix: '剥离审批前缀',
-      hintStripApprovalPrefix: '剥离审批原因里的 "escalate sandbox to …" 前缀。',
-      fieldLongTextMode: '超长文本模式',
-      hintLongTextMode: 'message = 念固定提示语；heading = 念最大字号标题。',
-      fieldLongTextMessage: '固定提示语',
-      hintLongTextMessage: '超长文本时朗读的提示语内容。',
-      fieldEnabled: '朗读总开关',
-      hintEnabled: '可以临时开启或关闭朗读效果。',
-      fieldMaxChars: '单次朗读字数上限',
-      hintMaxChars: '超过此长度改念提示语（SAPI 超出会静默失败）。',
-      fieldVolume: '音量（仅 Windows）',
-      hintVolume: '0-100；macOS 音量跟随系统。',
-      fieldRate: '语速',
-      hintRate: '0 = 引擎默认（Windows SAPI 刻度 / macOS wpm）。',
-      fieldAnnounceTurnEnd: '回合结束播报',
-      hintAnnounceTurnEnd: 'turn/end — 一轮对话结束时播报。',
-      fieldAnnounceCommandDone: '命令完成播报',
-      hintAnnounceCommandDone: 'command/done — agent 的命令执行完成/失败时播报。',
-      fieldAnnounceGoalChange: '目标变更播报',
-      hintAnnounceGoalChange: 'goal/change — 目标创建/更新/完成时播报。',
-      fieldAnnounceToolErrors: '工具出错播报',
-      hintAnnounceToolErrors: 'tool/result — 工具调用返回错误时播报摘要。',
-      fieldAnnounceTodoWrite: '待办更新播报',
-      hintAnnounceTodoWrite: 'todo/write — agent 更新待办列表时播报。',
-      booleanTrue: '开',
-      booleanFalse: '关',
-      selectMessage: 'message（固定提示语）',
-      selectHeading: 'heading（最大标题）',
-      expand: '展开设置',
-      collapse: '收起设置',
-      unsaved: '未保存',
-      pending: '未保存',
+      nav: 'dsh-speak 设置',
+      settingsAria: 'dsh-speak 设置',
+      settingsIntro: '自动播报与逐条重播的语音偏好。',
+      settingsTitle: 'dsh-speak',
+      actionSpeakTurn: '播报此回合',
+      actionStop: '停止播报',
+      toggleOn: '开',
+      toggleOff: '关',
+      masterSwitch: '总开关',
+      masterSwitchHint: '临时开启或关闭所有播报。',
+      automaticSpeech: '自动朗读',
+      automaticSpeechHint: '朗读最终回复。手动重播始终可用。',
+      queueAllMessages: '入队所有消息',
+      queueAllMessagesHint: '每一条 assistant 消息到达即入队朗读（中间消息也读，FIFO），而不只读最终回复。',
+      cleanMarkdown: '清理 Markdown',
+      cleanMarkdownHint: '把 Markdown 转成自然的语音文本。',
+      markdownCleaning: 'Markdown 清理',
+      readInlineCode: '朗读行内代码',
+      readInlineCodeHint: '朗读行内代码（去掉反引号标记）。',
+      codeBlocks: '代码块',
+      codeBlocksHint: '围栏代码块如何朗读。',
+      codeBlocksAll: '全部朗读',
+      codeBlocksSmart: '智能',
+      codeBlocksReplace: '全部替换',
+      codeBlockMaxChars: '代码块最大字数',
+      codeBlockMaxCharsHint: '仅用于智能模式。',
+      codeBlockReplacementText: '代码块替换文本',
+      codeBlockReplacementTextHint: '代码块被替换时朗读的文本。',
+      maxChars: '最大朗读字数',
+      maxCharsHint: 'macOS 上 0 = 不限；Windows 保留安全默认值。',
+      longTextBehavior: '超长文本行为',
+      longTextBehaviorHint: '超过正数上限时如何处理。',
+      longTextMessageOption: '朗读替换提示语',
+      longTextHeadingOption: '朗读最大标题',
+      fixedPrompt: '固定提示语',
+      fixedPromptHint: '超长文本（message 模式）时朗读的提示语。',
+      announceApprovals: '播报审批',
+      announceApprovalsHint: '朗读审批请求。',
+      announceQuestions: '播报提问',
+      announceQuestionsHint: '朗读 ask_user_question 问题。',
+      optionalEvents: '可选事件播报',
+      turnEnd: '回合结束',
+      turnEndHint: '一轮对话结束时播报。',
+      commandDone: '命令完成',
+      commandDoneHint: '命令完成或失败时播报。',
+      goalChange: '目标变更',
+      goalChangeHint: '目标创建/更新/完成时播报。',
+      toolErrors: '工具出错',
+      toolErrorsHint: '工具调用失败时播报错误摘要。',
+      todoWrite: '待办更新',
+      todoWriteHint: 'agent 更新待办列表时播报。',
     }
     const en = {
-      cardTitle: 'Voice announcements',
-      cardDescription: 'dsh-speak — let your agent tell you when a long task is done.',
-      readOnly: 'This deployment stores settings read-only.',
-      unsaved: 'Unsaved',
-      save: 'Save',
-      saving: 'Saving…',
-      discard: 'Discard',
-      saveFailed: 'The deployment did not accept these values; they were left for you to correct.',
-      overridden: 'Overridden',
-      reset: 'Reset to default',
-      fieldThrottleMs: 'Announce delay (ms)',
-      hintThrottleMs: 'How long a reply waits before being announced (merges multi-step messages).',
-      fieldEngine: 'Engine path override',
-      hintEngine: 'Blank auto-resolves: package engine → ~/.dsh/hooks.',
-      fieldAnnounceApprovals: 'Announce approval requests',
-      hintAnnounceApprovals: 'Speaks "需要你的审批" when the agent waits on you.',
-      hintDependsOnApprovals: 'Requires "Announce approval requests" to be on.',
-      fieldAnnounceQuestions: 'Announce questions',
-      hintAnnounceQuestions: 'Speaks ask_user_question content and options.',
-      fieldStripApprovalPrefix: 'Strip approval prefix',
-      hintStripApprovalPrefix: 'Strips the "escalate sandbox to …" prefix from approval reasons.',
-      fieldLongTextMode: 'Long-text mode',
-      hintLongTextMode: 'message = fixed prompt; heading = largest markdown heading.',
-      fieldLongTextMessage: 'Fixed prompt',
-      hintLongTextMessage: 'The prompt spoken for over-long text.',
-      fieldEnabled: 'Voice announcements master switch',
-      hintEnabled: 'Temporarily enable or disable all announcements.',
-      fieldMaxChars: 'Per-utterance character ceiling',
-      hintMaxChars: 'Beyond this, a prompt is spoken instead (SAPI fails silently).',
-      fieldVolume: 'Volume (Windows only)',
-      hintVolume: '0-100; macOS volume follows the system.',
-      fieldRate: 'Speech rate',
-      hintRate: '0 = engine default (Windows SAPI scale / macOS wpm).',
-      fieldAnnounceTurnEnd: 'Announce turn end',
-      hintAnnounceTurnEnd: 'turn/end — announced when a round of conversation ends.',
-      fieldAnnounceCommandDone: 'Announce command done',
-      hintAnnounceCommandDone: 'command/done — announced when an agent command finishes/fails.',
-      fieldAnnounceGoalChange: 'Announce goal changes',
-      hintAnnounceGoalChange: 'goal/change — announced when a goal is created/updated/completed.',
-      fieldAnnounceToolErrors: 'Announce tool errors',
-      hintAnnounceToolErrors: 'tool/result — announced when a tool call returns an error.',
-      fieldAnnounceTodoWrite: 'Announce todo updates',
-      hintAnnounceTodoWrite: 'todo/write — announced when the agent updates its todo list.',
-      booleanTrue: 'On',
-      booleanFalse: 'Off',
-      selectMessage: 'message (fixed prompt)',
-      selectHeading: 'heading (largest heading)',
-      expand: 'Show settings',
-      collapse: 'Hide settings',
-      unsaved: 'Unsaved',
-      pending: 'Unsaved',
+      nav: 'dsh-speak settings',
+      settingsAria: 'dsh-speak settings',
+      settingsIntro: 'Speech preferences for automatic announcements and per-message replay.',
+      settingsTitle: 'dsh-speak',
+      actionSpeakTurn: 'Speak turn',
+      actionStop: 'Stop speaking',
+      toggleOn: 'On',
+      toggleOff: 'Off',
+      masterSwitch: 'Master Switch',
+      masterSwitchHint: 'Temporarily enable or disable all announcements.',
+      automaticSpeech: 'Automatic Speech',
+      automaticSpeechHint: 'Speaks final assistant responses. Manual replay always remains available.',
+      queueAllMessages: 'Queue All Messages',
+      queueAllMessagesHint: 'Also speaks intermediate assistant messages in a FIFO queue, not only the final reply.',
+      cleanMarkdown: 'Clean Markdown Formatting',
+      cleanMarkdownHint: 'Converts Markdown into natural speech text.',
+      markdownCleaning: 'Markdown cleaning',
+      readInlineCode: 'Read Inline Code',
+      readInlineCodeHint: 'Reads inline code without backtick markers.',
+      codeBlocks: 'Code Blocks',
+      codeBlocksHint: 'Choose how fenced code blocks are spoken.',
+      codeBlocksAll: 'Read all',
+      codeBlocksSmart: 'Smart',
+      codeBlocksReplace: 'Replace all',
+      codeBlockMaxChars: 'Code Block Max Characters',
+      codeBlockMaxCharsHint: 'Only used by Smart code blocks.',
+      codeBlockReplacementText: 'Code Block Replacement Text',
+      codeBlockReplacementTextHint: 'Used when a code block is replaced.',
+      maxChars: 'Max Speech Characters',
+      maxCharsHint: '0 is unlimited on macOS; Windows keeps its safe default.',
+      longTextBehavior: 'Long Text Behavior',
+      longTextBehaviorHint: 'When a positive maximum is exceeded.',
+      longTextMessageOption: 'Read replacement message',
+      longTextHeadingOption: 'Read largest heading',
+      fixedPrompt: 'Fixed Prompt',
+      fixedPromptHint: 'The prompt spoken when the text is too long (message mode).',
+      announceApprovals: 'Announce Approvals',
+      announceApprovalsHint: 'Announces approval requests.',
+      announceQuestions: 'Announce Questions',
+      announceQuestionsHint: 'Announces ask-user questions.',
+      optionalEvents: 'Optional event announcements',
+      turnEnd: 'Turn End',
+      turnEndHint: 'Announces when a round of conversation ends.',
+      commandDone: 'Command Done',
+      commandDoneHint: 'Announces when a command finishes or fails.',
+      goalChange: 'Goal Change',
+      goalChangeHint: 'Announces goal created/updated/completed.',
+      toolErrors: 'Tool Errors',
+      toolErrorsHint: 'Announces an error summary when a tool call fails.',
+      todoWrite: 'Todo Write',
+      todoWriteHint: 'Announces when the agent updates its todos.',
     }
 
-    // ---------------------------------------------------------------------
-    // field model: every option the Host plugin honors, rendered generically
-    // ---------------------------------------------------------------------
-    // kind: 'boolean' | 'number' | 'text' | 'select'; number fields carry a step
-    const FIELDS = [
-      { key: 'enabled', kind: 'boolean', label: 'fieldEnabled', hint: 'hintEnabled' },
-      { key: 'throttleMs', kind: 'number', label: 'fieldThrottleMs', hint: 'hintThrottleMs', step: 100 },
-      { key: 'engine', kind: 'text', label: 'fieldEngine', hint: 'hintEngine' },
-      { key: 'announceApprovals', kind: 'boolean', label: 'fieldAnnounceApprovals', hint: 'hintAnnounceApprovals' },
-      { key: 'stripApprovalPrefix', kind: 'boolean', label: 'fieldStripApprovalPrefix', hint: 'hintStripApprovalPrefix', dependsOn: 'announceApprovals' },
-      { key: 'announceQuestions', kind: 'boolean', label: 'fieldAnnounceQuestions', hint: 'hintAnnounceQuestions' },
-      { key: 'longTextMode', kind: 'select', label: 'fieldLongTextMode', hint: 'hintLongTextMode', options: ['message', 'heading'] },
-      { key: 'longTextMessage', kind: 'text', label: 'fieldLongTextMessage', hint: 'hintLongTextMessage', showWhen: { key: 'longTextMode', value: 'message' } },
-      { key: 'maxChars', kind: 'number', label: 'fieldMaxChars', hint: 'hintMaxChars', step: 50 },
-      { key: 'volume', kind: 'number', label: 'fieldVolume', hint: 'hintVolume', step: 5 },
-      { key: 'rate', kind: 'number', label: 'fieldRate', hint: 'hintRate', step: 1 },
-      { key: 'announceTurnEnd', kind: 'boolean', label: 'fieldAnnounceTurnEnd', hint: 'hintAnnounceTurnEnd' },
-      { key: 'announceCommandDone', kind: 'boolean', label: 'fieldAnnounceCommandDone', hint: 'hintAnnounceCommandDone' },
-      { key: 'announceGoalChange', kind: 'boolean', label: 'fieldAnnounceGoalChange', hint: 'hintAnnounceGoalChange' },
-      { key: 'announceToolErrors', kind: 'boolean', label: 'fieldAnnounceToolErrors', hint: 'hintAnnounceToolErrors' },
-      { key: 'announceTodoWrite', kind: 'boolean', label: 'fieldAnnounceTodoWrite', hint: 'hintAnnounceTodoWrite' },
-    ]
-
-    // ---------------------------------------------------------------------
-    // card chrome — CSS classes injected once (same pattern as official
-    // bundles); no imports from official packages (bundle-purity gate).
-    // ---------------------------------------------------------------------
-    const CSS_ID = 'dsh-speak/client.css'
-    const css = `
-.dshspk-card{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:12px;list-style:none;transition:border-color .16s,background .16s}
-.dshspk-card:hover{border-color:var(--dsw-alias-label-dimmed)}
-.dshspk-cardOpen{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-label-dimmed)}
-.dshspk-header{appearance:none;width:100%;font:inherit;color:inherit;text-align:left;cursor:pointer;background:0 0;border:0;border-radius:12px;align-items:center;gap:12px;padding:14px 16px;display:flex}
-.dshspk-header:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}
-.dshspk-headText{flex-direction:column;flex:1;gap:4px;min-width:0;display:flex}
-.dshspk-name{color:var(--dsw-alias-label-primary);font-size:15px;font-weight:600;line-height:1.4;margin:0}
-.dshspk-description{color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:1.5;margin:0}
-.dshspk-chevron{color:var(--dsw-alias-label-tertiary);flex:none;transition:transform .16s;display:inline-flex}
-.dshspk-chevronOpen{transform:rotate(180deg)}
-.dshspk-body{border-top:1px solid var(--dsw-alias-border-l2);margin:0 16px;padding-bottom:8px}
-.dshspk-readOnly{color:var(--dsw-alias-label-tertiary);margin:12px 0 0;font-size:12px;line-height:1.5}
-.dshspk-pending{white-space:nowrap;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary);border-radius:999px;flex:none;padding:1px 8px;font-size:11px;font-weight:500;line-height:17px}
-.dshspk-field{flex-direction:column;gap:6px;padding:12px 0;display:flex}
-.dshspk-field+.dshspk-field{border-top:1px solid var(--dsw-alias-border-l2)}
-.dshspk-head{align-items:center;gap:8px;display:flex}
-.dshspk-label{min-width:0;color:var(--dsw-alias-label-primary);flex:1;font-size:13px;font-weight:500;line-height:1.5}
-.dshspk-badges{align-items:center;gap:8px;display:inline-flex}
-.dshspk-badge{white-space:nowrap;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary);border-radius:999px;padding:1px 8px;font-size:11px;font-weight:500;line-height:17px}
-.dshspk-reset{font:inherit;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:none;padding:0;font-size:12px;line-height:1.5}
-.dshspk-reset:hover:not(:disabled){color:var(--dsw-alias-label-primary)}
-.dshspk-reset:disabled{cursor:default}
-.dshspk-input{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);height:34px;font:inherit;color:var(--dsw-alias-label-primary);border-radius:8px;padding:0 12px;font-size:13px;line-height:1.5}
-.dshspk-input:focus-visible{border-color:var(--dsw-alias-brand-primary);outline:none}
-.dshspk-input:disabled{color:var(--dsw-alias-label-tertiary);cursor:default}
-.dshspk-hint{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px;line-height:1.5}
-.dshspk-checkRow{align-items:center;gap:8px;display:flex}
-.dshspk-switch{appearance:none;position:relative;width:36px;height:20px;border-radius:999px;background:var(--dsw-alias-border-l2);border:1px solid var(--dsw-alias-border-l2);cursor:pointer;transition:background .16s,border-color .16s;flex:none;margin:0;padding:0;box-sizing:border-box}
-.dshspk-switch::after{content:"";position:absolute;top:1px;left:1px;width:16px;height:16px;border-radius:999px;background:var(--dsw-alias-bg-layer-3);transition:transform .16s;box-shadow:0 1px 2px rgba(0,0,0,.2)}
-.dshspk-switch[data-on="true"]{background:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary)}
-.dshspk-switch[data-on="true"]::after{transform:translateX(16px)}
-.dshspk-switch:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
-.dshspk-switch:disabled{opacity:.4;cursor:default}
-.dshspk-switchLabel{color:var(--dsw-alias-label-secondary);font-size:13px;line-height:1.5;min-width:24px}
-.dshspk-number{display:flex;align-items:center;gap:0;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);border-radius:8px;height:34px;width:180px;overflow:hidden}
-.dshspk-number:focus-within{border-color:var(--dsw-alias-brand-primary)}
-.dshspk-number:has(> .dshspk-input:disabled){opacity:.5}
-.dshspk-numberInput{border:0;background:0 0;height:100%;font:inherit;color:var(--dsw-alias-label-primary);padding:0 0 0 12px;font-size:13px;line-height:1.5;flex:1;min-width:0;outline:none}
-.dshspk-numberInput:disabled{color:var(--dsw-alias-label-tertiary);cursor:default}
-.dshspk-stepCol{display:flex;flex-direction:column;border-left:1px solid var(--dsw-alias-border-l2);flex:none}
-.dshspk-stepBtn{appearance:none;width:24px;height:17px;display:flex;align-items:center;justify-content:center;background:0 0;border:0;padding:0;cursor:pointer;color:var(--dsw-alias-label-secondary)}
-.dshspk-stepBtn:first-child{border-bottom:1px solid var(--dsw-alias-border-l2)}
-.dshspk-stepBtn:hover:not(:disabled){background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary)}
-.dshspk-stepBtn:disabled{color:var(--dsw-alias-label-tertiary);cursor:default}
-.dshspk-footer{border-top:1px solid var(--dsw-alias-border-l2);justify-content:flex-end;align-items:center;gap:8px;padding:12px 0 4px;display:flex}
-.dshspk-failed{min-width:0;color:var(--dsw-alias-label-error);flex:1;margin:0;font-size:12px;line-height:1.5}
-.dshspk-btn{appearance:none;font:inherit;cursor:pointer;border:1px solid transparent;border-radius:8px;padding:5px 14px;font-size:13px;line-height:1.5}
-.dshspk-discard{border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);background:0 0}
-.dshspk-discard:hover:not(:disabled){color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-dimmed)}
-.dshspk-save{background:var(--dsw-alias-label-primary);color:var(--dsw-alias-bg-layer-3)}
-.dshspk-discard:disabled,.dshspk-save:disabled{opacity:.4;cursor:default}
-.dshspk-discard:focus-visible,.dshspk-save:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
-`
-    if (typeof document !== 'undefined' && document.querySelector(`style[data-plugin-css="${CSS_ID}"]`) === null) {
-      const tag = document.createElement('style')
-      tag.dataset.plugin = 'dsh-speak'
-      tag.dataset.pluginCss = CSS_ID
-      tag.textContent = css
-      document.head.appendChild(tag)
-    }
-    const cx = {
-      card: 'dshspk-card',
-      cardOpen: 'dshspk-card dshspk-cardOpen',
-      header: 'dshspk-header',
-      headText: 'dshspk-headText',
-      name: 'dshspk-name',
-      description: 'dshspk-description',
-      chevron: 'dshspk-chevron',
-      chevronOpen: 'dshspk-chevron dshspk-chevronOpen',
-      body: 'dshspk-body',
-      readOnly: 'dshspk-readOnly',
-      pending: 'dshspk-pending',
-      field: 'dshspk-field',
-      head: 'dshspk-head',
-      label: 'dshspk-label',
-      badges: 'dshspk-badges',
-      badge: 'dshspk-badge',
-      reset: 'dshspk-reset',
-      input: 'dshspk-input',
-      hint: 'dshspk-hint',
-      checkRow: 'dshspk-checkRow',
-      switch: 'dshspk-switch',
-      switchLabel: 'dshspk-switchLabel',
-      number: 'dshspk-number',
-      numberInput: 'dshspk-numberInput',
-      stepCol: 'dshspk-stepCol',
-      stepBtn: 'dshspk-stepBtn',
-      footer: 'dshspk-footer',
-      failed: 'dshspk-failed',
-      button: 'dshspk-btn',
-      discard: 'dshspk-btn dshspk-discard',
-      save: 'dshspk-btn dshspk-save',
-      saveDisabled: 'dshspk-btn dshspk-save',
-    }
-
-    /**
-     * One staged edit. `staged` maps field key → { type: 'set', value } or
-     * { type: 'clear' }; the form only writes what the user changed.
-     */
-    function SpeakSettingsCard({ t, scope }) {
-      const snapshot = useSyncExternalStore(
-        (cb) => scope.subscribe(cb),
-        () => scope.getSnapshot(),
-        () => scope.getSnapshot(),
-      )
-      const [open, setOpen] = useState(false)
-      const [staged, setStaged] = useState(() => ({}))
-      const [saving, setSaving] = useState(false)
-      const [failed, setFailed] = useState(false)
-
-      if (snapshot.status !== 'ready') {
-        return h('li', { className: cx.card },
-          h('button', { type: 'button', className: cx.header, onClick: () => setOpen(!open) },
-            h('span', { className: cx.headText },
-              h('h3', { className: cx.name }, t('cardTitle')),
-              h('p', { className: cx.description }, t('cardDescription')),
-            ),
-            h('span', { className: open ? cx.chevronOpen : cx.chevron },
-              h('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': 'true' },
-                h('path', { d: 'M4 6l4 4 4-4', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round' }),
-              ),
-            ),
-          ),
-        )
-      }
-      const value = snapshot.value || {}
-      const user = snapshot.user
-      const writable = snapshot.writable
-      const dirty = Object.keys(staged).length > 0
-
-      function effective(field) {
-        if (staged[field]) return staged[field].value
-        return value[field]
-      }
-      function overridden(field) {
-        return user !== undefined && user !== null && Object.prototype.hasOwnProperty.call(user, field)
-      }
-      function stage(field, next) {
-        setFailed(false)
-        setStaged((prev) => {
-          const copy = { ...prev }
-          if (next === undefined) delete copy[field]
-          else copy[field] = { value: next }
-          return copy
-        })
-      }
-      function stageClear(field) {
-        setFailed(false)
-        setStaged((prev) => ({ ...prev, [field]: { value: undefined, clear: true } }))
-      }
-      function fieldCurrent(field) {
-        const s = staged[field]
-        if (s) return s.clear ? '' : String(s.value ?? '')
-        return String(value[field] ?? '')
-      }
-      function fieldBool(field) {
-        const s = staged[field]
-        if (s) return s.clear ? false : !!s.value
-        return !!value[field]
-      }
-
-      async function save() {
-        if (saving) return
-        setSaving(true)
-        setFailed(false)
-        try {
-          for (const [field, edit] of Object.entries(staged)) {
-            if (edit.clear || edit.value === undefined || edit.value === '') {
-              await scope.unset(field)
-            } else {
-              await scope.set(field, edit.value)
-            }
-          }
-          setStaged({})
-        } catch (e) {
-          setFailed(true)
-        } finally {
-          setSaving(false)
-        }
-      }
-      function discard() {
-        setStaged({})
-        setFailed(false)
-      }
-
-      const fieldNodes = FIELDS
-        .filter((f) => {
-          // showWhen: only render the field when the referenced field matches
-          if (!f.showWhen) return true
-          return effective(f.showWhen.key) === f.showWhen.value
-        })
-        .map((f) => {
-        // dependency lock: a switch that needs another switch on first
-        const locked = f.dependsOn ? !fieldBool(f.dependsOn) : false
-        let control
-        if (f.kind === 'boolean') {
-          const on = fieldBool(f.key)
-          const disabled = !writable || locked
-          const effectiveOn = locked ? false : on
-          control = h('label', { className: cx.checkRow, key: 'ctl' },
-            h('button', {
-              type: 'button',
-              role: 'switch',
-              'aria-checked': effectiveOn ? 'true' : 'false',
-              'data-on': effectiveOn ? 'true' : 'false',
-              className: cx.switch,
-              disabled,
-              title: locked ? t('hintDependsOnApprovals') : undefined,
-              onClick: (e) => {
-                e.preventDefault()
-                if (!locked) stage(f.key, !on)
-              },
-            }),
-            h('span', { className: cx.switchLabel }, t(effectiveOn ? 'booleanTrue' : 'booleanFalse')),
-          )
-        } else if (f.kind === 'select') {
-          control = h('select', {
-            className: cx.input,
-            value: String(effective(f.key) ?? f.options[0]),
-            disabled: !writable,
-            onChange: (e) => stage(f.key, e.target.value),
-          }, f.options.map((opt) => h('option', { key: opt, value: opt }, t(opt === 'message' ? 'selectMessage' : 'selectHeading'))))
-        } else if (f.kind === 'number') {
-          const step = f.step || 1
-          const current = fieldCurrent(f.key)
-          const numNow = current === '' ? null : Number(current)
-          const bump = (delta) => {
-            const base = (numNow === null || !Number.isFinite(numNow)) ? 0 : numNow
-            const next = base + delta
-            if (next < 0) { stageClear(f.key); return }
-            stage(f.key, next)
-          }
-          control = h('div', { className: cx.number, key: 'ctl' },
-            h('input', {
-              type: 'text',
-              inputMode: 'numeric',
-              className: cx.numberInput,
-              value: current,
-              placeholder: '',
-              disabled: !writable,
-              'aria-label': t(f.label),
-              onChange: (e) => {
-                const raw = e.target.value.trim()
-                if (raw === '') { stageClear(f.key); return }
-                const num = Number(raw)
-                if (Number.isFinite(num) && num >= 0) stage(f.key, num)
-              },
-            }),
-            h('span', { className: cx.stepCol },
-              h('button', {
-                type: 'button',
-                className: cx.stepBtn,
-                disabled: !writable,
-                'aria-label': `${t(f.label)} +${step}`,
-                onClick: () => bump(step),
-              }, h('svg', { width: 10, height: 10, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': 'true' },
-                h('path', { d: 'M8 3v10M3 8h10', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round' }),
-              )),
-              h('button', {
-                type: 'button',
-                className: cx.stepBtn,
-                disabled: !writable,
-                'aria-label': `${t(f.label)} -${step}`,
-                onClick: () => bump(-step),
-              }, h('svg', { width: 10, height: 10, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': 'true' },
-                h('path', { d: 'M3 8h10', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round' }),
-              )),
-            ),
-          )
-        } else {
-          control = h('input', {
-            type: 'text',
-            className: cx.input,
-            value: fieldCurrent(f.key),
-            placeholder: '',
-            disabled: !writable,
-            onChange: (e) => {
-              const raw = e.target.value
-              if (raw === '') { stageClear(f.key); return }
-              stage(f.key, raw)
-            },
-          })
-        }
-        return h('div', { className: cx.field, key: f.key },
-          h('div', { className: cx.head },
-            h('label', { className: cx.label, htmlFor: `dsh-speak-${f.key}` }, t(f.label)),
-            h('span', { className: cx.badges },
-              overridden(f.key) ? h('span', { className: cx.badge }, t('overridden')) : null,
-              overridden(f.key) && writable ? h('button', {
-                type: 'button',
-                className: cx.reset,
-                disabled: !writable,
-                onClick: () => stageClear(f.key),
-              }, t('reset')) : null,
-            ),
-          ),
-          control,
-          h('p', { className: cx.hint }, locked ? t('hintDependsOnApprovals') : t(f.hint)),
-        )
-      })
-
-      return h('li', { className: open ? cx.cardOpen : cx.card },        h('button', {
-          type: 'button',
-          className: cx.header,
-          'aria-expanded': open ? 'true' : 'false',
-          'aria-label': `${t(open ? 'collapse' : 'expand')}: ${t('cardTitle')}`,
-          onClick: () => setOpen(!open),
-        },
-          h('span', { className: cx.headText },
-            h('h3', { className: cx.name }, t('cardTitle')),
-            h('p', { className: cx.description }, t('cardDescription')),
-          ),
-          dirty ? h('span', { className: cx.pending }, t('unsaved')) : null,
-          h('span', { className: open ? cx.chevronOpen : cx.chevron },
-            h('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': 'true' },
-              h('path', { d: 'M4 6l4 4 4-4', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round' }),
-            ),
-          ),
-        ),
-        open ? h('div', { className: cx.body },
-          !writable ? h('p', { className: cx.readOnly }, t('readOnly')) : null,
-          fieldNodes,
-          h('div', { className: cx.footer },
-            failed ? h('p', { className: cx.failed }, t('saveFailed')) : null,
-            h('button', {
-              type: 'button',
-              className: cx.discard,
-              disabled: !dirty || saving,
-              onClick: discard,
-            }, t('discard')),
-            h('button', {
-              type: 'button',
-              className: cx.save,
-              disabled: !dirty || saving,
-              onClick: save,
-            }, t(saving ? 'saving' : 'save')),
-          ),
-        ) : null,
-      )
-    }
-
-    // ---------------------------------------------------------------------
-    // plugin entry
-    // ---------------------------------------------------------------------
-    function apply(ctx) {
+    module.exports.inject = ['slots', 'timer', 'settingsScope', 'locale']
+    module.exports.apply = function apply(ctx) {
       ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-speak: dictionaries')
       const t = ctx.locale.bind(NS)
-      ctx.inject(['settingsScope'], (scoped) => {
-        const scope = scoped.settingsScope.bind({ namespace: NS })
-        scoped.slots.inject('settings.plugin.item', () => scoped.slots.register({
-          name: 'settings.plugin.item',
-          key: NS,
-          locale: NS,
-          inject: () => ({ t }),
-        }, () => h(SpeakSettingsCard, { t, scope })))
-      })
-    }
 
-    exports.apply = apply
-    exports.inject = inject
+      let speechState = { speaking: false, sessionId: null, turn: null, messageId: null, source: null, queueLength: 0 }
+      const listeners = new Set()
+      const settings = ctx.settingsScope.bind({ namespace: SETTINGS_NAMESPACE })
+      const e = React.createElement
+      function IconVolume2({ size = 20, className }) {
+        return e('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', className, 'aria-hidden': 'true' },
+          e('path', { d: 'M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z' }),
+          e('path', { d: 'M16 9a5 5 0 0 1 0 6' }), e('path', { d: 'M19.364 18.364a9 9 0 0 0 0-12.728' }),
+        )
+      }
+      function publish(next) {
+        speechState = next && typeof next === 'object' ? next : { speaking: false, sessionId: null, turn: null, messageId: null, source: null, queueLength: 0 }
+        for (const listener of listeners) listener()
+      }
+      async function control(payload) {
+        const response = await fetch(CONTROL_PATH, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+        if (!response.ok) throw new Error(`dsh-speak control failed (${response.status})`)
+        const state = await response.json()
+        if (state && state.type === 'speech-state') publish(state)
+        return state
+      }
+      ctx.effect(() => {
+        let socket = null
+        let retry = null
+        let disposed = false
+        const connect = () => {
+          if (disposed) return
+          const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:'
+          socket = new WebSocket(`${scheme}//${location.host}${SOCKET_PATH}`)
+          socket.onmessage = event => {
+            try {
+              const state = JSON.parse(event.data)
+              if (state && state.type === 'speech-state') publish(state)
+            } catch (e) { console.warn('[dsh-speak] ignored invalid speech websocket state') }
+          }
+          socket.onclose = () => {
+            if (!disposed) retry = ctx.timeout(connect, 1000)
+          }
+          socket.onerror = () => { try { socket.close() } catch (e) { /* closed */ } }
+        }
+        connect()
+        return () => {
+          disposed = true
+          if (retry) retry()
+          try { if (socket) socket.close() } catch (e) { /* closed */ }
+        }
+      }, 'dsh-speak speech state websocket')
+      function useSpeechState() {
+        const [snapshot, setSnapshot] = React.useState(speechState)
+        React.useEffect(() => { const update = () => setSnapshot(speechState); listeners.add(update); return () => listeners.delete(update) }, [])
+        return snapshot
+      }
+      function visibleText(node) {
+        return Array.isArray(node && node.blocks) ? node.blocks.filter(block => block && block.kind === 'text' && typeof block.text === 'string').map(block => block.text).join('') : ''
+      }
+      function SpeakAction(props) {
+        const messageId = props.messageId == null ? null : String(props.messageId)
+        const turnData = props.useSession(snapshot => {
+          const addressed = snapshot.nodes.find(node => node.kind === 'assistant' && String(node.messageId) === messageId)
+          if (!addressed || !Number.isFinite(addressed.turn)) return { turn: null, text: '' }
+          const nodes = snapshot.nodes.filter(node => node.kind === 'assistant' && node.turn === addressed.turn).slice().sort((a, b) => a.seq - b.seq)
+          return { turn: addressed.turn, text: nodes.map(visibleText).filter(Boolean).join('\n\n') }
+        })
+        const active = useSpeechState()
+        const speaking = active.speaking && String(active.sessionId) === String(props.sessionId) && active.turn === turnData.turn
+        const [pending, setPending] = React.useState(false)
+        const label = speaking ? t('actionStop') : t('actionSpeakTurn')
+        return e('button', {
+          type: 'button', className: 'dsh-speak-message-action', 'aria-label': label, 'aria-pressed': speaking,
+          'data-speaking': speaking || undefined, title: label, disabled: pending || !turnData.text.trim(),
+          onClick: () => {
+            if (pending) return
+            setPending(true)
+            const action = speaking ? 'stop' : 'play'
+            const payload = speaking ? { action } : { action, sessionId: props.sessionId, turn: turnData.turn, messageId, text: turnData.text }
+            void control(payload).catch(console.error).finally(() => setPending(false))
+          },
+        }, speaking ? e(IconPauseOutline16) : e(IconVolume2))
+      }
+      function useSettings() {
+        const [snapshot, setSnapshot] = React.useState(settings.getSnapshot())
+        React.useEffect(() => settings.subscribe(() => setSnapshot(settings.getSnapshot())), [])
+        return snapshot
+      }
+      function Field({ label, hint, children, inline }) {
+        return e('div', { className: 'dsh-speak-field' }, inline ? e('div', { className: 'dsh-speak-inline-field' }, e('div', { className: 'dsh-speak-field-label' }, label), children) : e('div', { className: 'dsh-speak-field-label' }, label), inline ? null : children, e('p', { className: 'dsh-speak-field-hint' }, hint))
+      }
+      function Toggle({ label, value, disabled, onChange, hint }) { return e(Field, { label: `${label}:`, hint, inline: true }, e('div', { className: 'dsh-speak-option-row' }, e(Button, { variant: 'outline', size: 'sm', disabled, 'aria-pressed': value, onClick: () => onChange(!value) }, value ? t('toggleOn') : t('toggleOff')))) }
+      function SettingInput({ label, value, disabled, numeric, onChange, hint }) { const id = `dsh-speak-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`; return e(Field, { label: `${label}:`, hint }, e('div', { className: 'dsh-speak-input-row' }, e(Input, { id, value: String(value), disabled, inputMode: numeric ? 'numeric' : undefined, onChange: event => onChange(event.target.value) }))) }
+      function Options({ label, value, disabled, onChange, hint, options }) { return e(Field, { label, hint }, e('div', { className: 'dsh-speak-option-row' }, ...options.map(option => e(Button, { key: option.value, variant: value === option.value ? 'primary' : 'outline', size: 'sm', disabled, 'aria-pressed': value === option.value, onClick: () => onChange(option.value) }, option.label)))) }
+      function MarkdownCleaning({ value, clean, disabled, set }) {
+        const [open, setOpen] = React.useState(true); const controlsDisabled = disabled || !clean
+        return e(DisclosureRow, { icon: null, title: t('markdownCleaning'), open, expandable: true, onToggle: () => setOpen(!open), expandOnRowClick: true }, e('div', { style: { paddingLeft: '22px' } },
+          e(Toggle, { label: t('readInlineCode'), value: value.readInlineCode !== false, disabled: controlsDisabled, onChange: next => set('readInlineCode', next), hint: t('readInlineCodeHint') }),
+          e(Options, { label: t('codeBlocks'), value: value.codeBlocks || 'smart', disabled: controlsDisabled, onChange: next => set('codeBlocks', next), hint: t('codeBlocksHint'), options: [{ value: 'all', label: t('codeBlocksAll') }, { value: 'smart', label: t('codeBlocksSmart') }, { value: 'replace', label: t('codeBlocksReplace') }] }),
+          e(SettingInput, { label: t('codeBlockMaxChars'), value: value.codeBlockMaxChars == null ? 300 : value.codeBlockMaxChars, numeric: true, disabled: controlsDisabled || value.codeBlocks !== 'smart', onChange: next => { if (/^\d+$/.test(next)) set('codeBlockMaxChars', Number(next)) }, hint: t('codeBlockMaxCharsHint') }),
+          e(SettingInput, { label: t('codeBlockReplacementText'), value: value.codeBlockReplacementText || 'You can see the code in our history.', disabled: controlsDisabled || value.codeBlocks === 'all', onChange: next => set('codeBlockReplacementText', next), hint: t('codeBlockReplacementTextHint') }),
+        ))
+      }
+      function SettingsCard() {
+        // hooks must run unconditionally (before the ready-guard return)
+        const [eventsOpen, setEventsOpen] = React.useState(false)
+        const snapshot = useSettings(); if (snapshot.status !== 'ready' || !snapshot.value) return null
+        const value = snapshot.value; const disabled = !snapshot.writable; const clean = value.cleanMarkdownFormatting !== false; const set = (field, next) => { void settings.set(field, next).catch(console.error) }
+        return e('section', { 'aria-label': t('settingsAria') }, e('h3', null, t('settingsTitle')), e('p', null, t('settingsIntro')),
+          e(Toggle, { label: t('masterSwitch'), value: value.enabled !== false, disabled, onChange: next => set('enabled', next), hint: t('masterSwitchHint') }),
+          e(Toggle, { label: t('automaticSpeech'), value: value.automaticSpeech !== false, disabled, onChange: next => set('automaticSpeech', next), hint: t('automaticSpeechHint') }),
+          e(Toggle, { label: t('queueAllMessages'), value: value.queueAllMessages === true, disabled: disabled || value.automaticSpeech === false, onChange: next => set('queueAllMessages', next), hint: t('queueAllMessagesHint') }),
+          e(Toggle, { label: t('cleanMarkdown'), value: clean, disabled, onChange: next => set('cleanMarkdownFormatting', next), hint: t('cleanMarkdownHint') }), e(MarkdownCleaning, { value, clean, disabled, set }),
+          e(SettingInput, { label: t('maxChars'), value: value.maxChars == null ? 0 : value.maxChars, numeric: true, disabled, onChange: next => { if (/^\d+$/.test(next)) set('maxChars', Number(next)) }, hint: t('maxCharsHint') }),
+          e(Options, { label: t('longTextBehavior'), value: value.longTextMode || 'message', disabled, onChange: next => set('longTextMode', next), hint: t('longTextBehaviorHint'), options: [{ value: 'message', label: t('longTextMessageOption') }, { value: 'heading', label: t('longTextHeadingOption') }] }),
+          e(SettingInput, { label: t('fixedPrompt'), value: value.longTextMessage || '本次播报内容较长，请自行阅读。', disabled: disabled || value.longTextMode !== 'message', onChange: next => set('longTextMessage', next), hint: t('fixedPromptHint') }),
+          e(Toggle, { label: t('announceApprovals'), value: value.announceApprovals !== false, disabled, onChange: next => set('announceApprovals', next), hint: t('announceApprovalsHint') }),
+          e(Toggle, { label: t('announceQuestions'), value: value.announceQuestions !== false, disabled, onChange: next => set('announceQuestions', next), hint: t('announceQuestionsHint') }),
+          e(DisclosureRow, { icon: null, title: t('optionalEvents'), open: eventsOpen, expandable: true, onToggle: () => setEventsOpen(!eventsOpen), expandOnRowClick: true }, e('div', { style: { paddingLeft: '22px' } },
+            e(Toggle, { label: t('turnEnd'), value: value.announceTurnEnd === true, disabled, onChange: next => set('announceTurnEnd', next), hint: t('turnEndHint') }),
+            e(Toggle, { label: t('commandDone'), value: value.announceCommandDone === true, disabled, onChange: next => set('announceCommandDone', next), hint: t('commandDoneHint') }),
+            e(Toggle, { label: t('goalChange'), value: value.announceGoalChange === true, disabled, onChange: next => set('announceGoalChange', next), hint: t('goalChangeHint') }),
+            e(Toggle, { label: t('toolErrors'), value: value.announceToolErrors === true, disabled, onChange: next => set('announceToolErrors', next), hint: t('toolErrorsHint') }),
+            e(Toggle, { label: t('todoWrite'), value: value.announceTodoWrite === true, disabled, onChange: next => set('announceTodoWrite', next), hint: t('todoWriteHint') }),
+          )),
+        )
+      }
+      ctx.effect(() => {
+        const style = document.createElement('style'); style.dataset.plugin = 'dsh-speak'
+        style.textContent = '.dsh-speak-message-action{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:5px;border:0;border-radius:28px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;font:inherit;font-size:14px;line-height:1}.dsh-speak-message-action:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.dsh-speak-message-action[data-speaking]{color:var(--dsw-alias-label-primary)}.dsh-speak-message-action:disabled{cursor:default;opacity:.4}.dsh-speak-field{display:flex;flex-direction:column;gap:8px;margin:0 0 20px}.dsh-speak-field-label{font-weight:600;color:var(--dsw-alias-label-primary)}.dsh-speak-inline-field{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dsh-speak-inline-field>.dsh-speak-field-label{flex:none}.dsh-speak-field-hint{margin:0;color:var(--dsw-alias-label-tertiary)}.dsh-speak-field+.dsh-speak-field{margin-top:20px}.dsh-speak-option-row{display:inline-flex;align-items:center;gap:8px;width:max-content;max-width:100%}.dsh-speak-input-row{display:flex;max-width:100%}.dsh-speak-input-row>span{max-width:100%}'
+        document.head.appendChild(style); return () => style.remove()
+      }, 'dsh-speak message action styles')
+      ctx.slots.inject('conversation.chat.assistant-actions', () => ctx.slots.register({ name: 'conversation.chat.assistant-actions', id: 'speak', order: 5, label: 'Speak', locale: NS }, SpeakAction))
+      ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'speak', order: 25, label: () => t('nav'), locale: NS }, SettingsCard))
+    }
     return module.exports
   },
 })

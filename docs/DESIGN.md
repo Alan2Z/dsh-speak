@@ -35,12 +35,12 @@ Goals:
 
 Non-goals (for now):
 
-- Both engines — Windows `speak.ps1` and macOS `speak.sh` (built-in `say`) — are
-  **officially supported** (macOS ships in the npm package since 1.2.0).
-  Linux/headless TTS is not supported.
+- Linux/headless TTS is not supported (Windows uses `speak.ps1` + SAPI5; macOS
+  uses `speak.sh` + the built-in `say`, shipped in the npm package since 1.2.0).
 - In-repo packaging of NaturalVoiceSAPIAdapter (Windows 10 only) or voice data —
   they are prerequisites, not bundled.
-- Streaming/queued playback, per-voice audio files, non-Chinese voice curation.
+- Per-voice audio files, non-Chinese voice curation (the speech **playback
+  queue** is already implemented in 1.7.0 — see §3.2's host FIFO queue).
 
 ## 3. Architecture
 
@@ -114,26 +114,37 @@ no "reply finished" hook, so the plugin observes the session event stream:
 - listens to `session/event`;
 - filters `assistant/message` events with `surfaceOp == 'append'`;
 - extracts only `text` content blocks (reasoning / tool_use blocks are skipped);
-- buffers the text and starts a throttle timer (default 1500 ms) to merge
-  multi-step messages of one reply;
-- a `tool/call` event **cancels** the pending announcement — that round's assistant
-  text is process narration, not the final reply;
-- on fire: writes the text to a temp file and `spawn`s
-  `powershell.exe -File <engine> -File <tmp>` with `windowsHide` + `stdio: 'ignore'`
-  so the harness is never blocked; the temp file is deleted on exit.
+- default mode: buffers the text and starts a throttle timer (default 1500 ms) to
+  merge multi-step messages of one reply; a `tool/call` event **cancels** the
+  pending announcement (that round's assistant text is process narration), but
+  **`turn/end` fallback-announces the final reply** (tool-calling replies are
+  still heard);
+- **host speech queue** (1.7.0, from PR #2): every announcement (final reply,
+  approvals, questions, optional events, manual replay) goes through a FIFO
+  queue — only one native speech process runs at a time, queued items continue
+  automatically. A `/dsh-speak/control` POST route (play/stop/status) and a
+  `/dsh-speak/ws` WebSocket broadcast the authoritative speech state (which
+  message is speaking, queue length).
+- **Per-message replay** (1.7.0): the 🔊 button on each assistant message calls
+  the control route to replay that turn; speech execution stays fully owned by
+  the host (keeps speaking even with the browser closed).
+- **`queueAllMessages` switch** (1.7.0, default off): off = throttled final
+  reply + optional events (as before); on = every assistant message is enqueued
+  immediately (intermediate messages spoken too).
 - **Optional event announcements** (1.6.0, all off by default): `turn/end`,
   `command/done`, `goal/change`, `tool/result` (on error), and `todo/write` each
   have an independent toggle and announce a fixed phrase on fire (see §5).
-- **Settings namespace registration** (1.6.0): on apply the plugin calls
-  `installSettingsSection(ctx, 'dsh-speak', schema, patchConfig, hooks)` (from
-  `@deepseek-ai/dsh-settings`, loaded via dynamic `import()`), resolving config as
-  schema default → patch `config` → UI user layer; `onChange` writes the resolved
-  value back into the mutable internal `cfg` object. The browser half
-  (`client/client.js`) renders the configuration card. On hosts without a settings
-  service (dsh < 0.1.0-rc.7 or no provider mounted) the registration is skipped
-  silently and the plugin works purely from the patch config — backward compatible.
+- **Settings namespace registration** (1.6.0): one timer tick after apply the
+  plugin calls `installSettingsSection(ctx, 'dsh-speak', schema, patchConfig,
+  hooks)`, resolving config as schema default → patch `config` → UI user layer.
+  `onChange` re-derives `cfg` from a saved `settingsSource()` thunk (note:
+  `installSettingsSection` only calls `setSource` on attach/detach, so changes
+  must be re-read in `onChange`). On hosts without a settings service (dsh <
+  0.1.0-rc.7 or no provider mounted) the registration is skipped silently and
+  the plugin works purely from the patch config — backward compatible.
 
-Registration snippet (also automated by `install.ps1`):
+Registration snippet (also automated by `install.ps1`; npm installs use the bare
+package name `'dsh-speak'` — this is the file-install path):
 
 ```yaml
 # ~/.dsh/profiles/web/cordis.patch.yml
@@ -149,22 +160,28 @@ Registration snippet (also automated by `install.ps1`):
 ### 3.4 DSH browser half — `client/client.js`
 
 A DSH client bundle (`window.__ModuleLoader__.load({ id: 'dsh-speak', factory })`)
-that registers a configuration card under Settings → Plugins → Plugin
-configuration:
+that registers two pieces of UI:
+
+- **Per-message Speak button** (1.7.0, from PR #2): registered into the
+  `conversation.chat.assistant-actions` slot (message action bar). Clicking 🔊
+  POSTs to `/dsh-speak/control` to replay that turn; clicking again stops;
+  clicking another switches. The button's speaking/paused state is derived from
+  the authoritative host state over the `/dsh-speak/ws` WebSocket (matched by
+  session + turn identity).
+- **Settings → dsh-speak settings page** (1.7.0): registered into the
+  `settings.section` slot, drawn with `@deepseek-ai/dsh-client-ui-primitives`
+  (Button / DisclosureRow / Input; Toggle / Options / SettingInput helpers). Every
+  option (master switch, automatic speech, queueAllMessages, Markdown cleaning,
+  code blocks, maxChars, longTextMode, fixed prompt, approvals/questions, the five
+  optional events) is read/written through `settingsScope.bind({ namespace:
+  'dsh-speak' })`.
 
 - The package declares its browser half via `package.json`
   `dsh.client: { platform: 'web' }` + `exports['./client']`; DSH's client-modules
   scanner picks it up and loads it automatically.
-- The card registers into the `settings.plugin.item` slot keyed `dsh-speak`
-  (matching the Host-side namespace); the UI only shows it when the Host has
-  registered that namespace.
-- The card reads/writes config through the client `settingsScope.bind({
-  namespace: 'dsh-speak' })`: shows resolved values, marks "Overridden" fields,
-  and on save does per-field `set`/`unset`.
 - **Deliberately handwritten, zero build**: it only uses platform seed modules
-  (`react`, the slots/locale/settingsScope services) and imports no official
-  package internals (the client bundle-purity gate forbids that), matching the
-  built bundles' contract.
+  and official primitives (the bundle-purity gate allows primitives but forbids
+  importing official package internals), matching the built bundles' contract.
 
 ### 3.3 Claude Code adapter — `adapters/claude-code/stop-hook.ps1`
 
@@ -180,7 +197,7 @@ returns immediately. (Async spawning is safe here — the nested-spawn restricti
 | assistant round / event          | announced? |
 | -------------------------------- | ----------- |
 | final text reply, no tool call   | ✅ after throttle |
-| text + tool/call(s)              | ❌ (cancelled — narration) |
+| text + tool/call(s)              | 🟡 throttle cancelled (intermediate); **fallback-announced at turn end** |
 | text + `ask_user_question` call  | ✅ the question text is kept and announced |
 | `approval/asked`                 | ✅ immediately (reason, else a fixed prompt) |
 | reasoning only, no text          | ❌ (no text block) |
@@ -188,8 +205,10 @@ returns immediately. (Async spawning is safe here — the nested-spawn restricti
 | `turn/end`                       | 🟡 off by default; announces "第 N 轮对话完成/中断/异常结束" |
 | `command/done`                   | 🟡 off by default; announces "命令执行完成/失败" |
 | `goal/change`                    | 🟡 off by default; announces "已创建目标/目标已完成…" (head) |
-| `tool/result`                    | 🟡 off by default; announces an error summary only when `error` is present |
+| `tool/result`                    | 🟡 off by default; announces an error summary only when `error` or an `isError` content block is present |
 | `todo/write`                     | 🟡 off by default; announces "待办已更新：n/m 完成" |
+| `assistant/message` (queueAllMessages on) | ✅ every message enqueued immediately (intermediate spoken too) |
+| manual replay (per-message 🔊)   | ✅ clear queue → stop current → speak that turn |
 
 ## 5. Configuration reference
 
@@ -201,36 +220,51 @@ returns immediately. (Async spawning is safe here — the nested-spawn restricti
 | `-File`           | `''`                        | UTF-8 file to read                       |
 | `-Volume`         | `50`                        | 0–100                                    |
 | `-Rate`           | `1`                         | speech rate (SAPI scale)                 |
-| `-MaxChars`       | `300`                       | beyond this, replaced by `LongTextMessage` |
+| `-MaxChars`       | platform                    | beyond this, replaced by `LongTextMessage` (macOS default 0 = unlimited) |
 | `-LongTextMessage`| `本次播报内容较长，请自行阅读。` | spoken instead of over-long text         |
 | `-LongTextMode`   | `message`                    | `message` (fixed prompt) \| `heading` (speak the largest markdown heading) |
+| `-CleanMarkdownFormatting` | `true`               | convert Markdown to natural speech (link labels kept, URLs stripped) |
+| `-ReadInlineCode` | `true`                       | read inline code without backtick markers |
+| `-CodeBlocks`     | `smart`                      | `all` \| `smart` \| `replace` (fenced code blocks) |
+| `-CodeBlockMaxChars` | `300`                    | smart-mode code block character limit |
+| `-CodeBlockReplacementText` | `You can see the code in our history.` | spoken in replace mode |
 
-### DSH plugin (profile `config`; since 1.6.0 also editable in the Web UI card)
+### DSH plugin (profile `config`; since 1.7.0 also editable in the Settings → dsh-speak settings page)
 
 ```yaml
 config:
+  enabled: true                # master switch
+  automaticSpeech: true        # auto-speak final replies
+  queueAllMessages: false      # true = enqueue every assistant message
+  cleanMarkdownFormatting: true
+  readInlineCode: true
+  codeBlocks: smart            # all | smart | replace
+  codeBlockMaxChars: 300
+  codeBlockReplacementText: 'You can see the code in our history.'
   throttleMs: 1500
-  engine: ''                 # '' = auto-resolve
+  engine: ''                   # '' = auto-resolve
   announceApprovals: true
   announceQuestions: true
   stripApprovalPrefix: true
-  longTextMode: message      # message | heading
-  maxChars: 300
-  volume: 50                 # Windows only
-  rate: 0                    # 0 = engine default
+  longTextMode: message        # message | heading
+  longTextMessage: '本次播报内容较长，请自行阅读。'
+  maxChars: 300                # macOS default 0 = unlimited
+  volume: 50                   # Windows only
+  rate: 0                      # 0 = engine default
   # —— optional event announcements (off by default) ——
   announceTurnEnd: false     # turn/end
   announceCommandDone: false # command/done
   announceGoalChange: false  # goal/change
-  announceToolErrors: false  # tool/result with error
+  announceToolErrors: false  # tool/result with error or isError block
   announceTodoWrite: false   # todo/write
 ```
 
 Resolution order: schema default → patch `config` (base) → UI user layer. The
-browser card (`client/client.js`) and the patch YAML read/write the same settings
-document.
+browser dsh-speak settings page (`client/client.js`) and the patch YAML read/write
+the same settings document. Platform note: `maxChars` defaults to 0 on macOS
+(`say` has no ceiling) and 300 on Windows (SAPI safe limit).
 
-Full guide: docs/CUSTOMIZATION.md.
+Full configuration guide: the README's Configuration section.
 
 ## 6. Pitfalls (hard-won; do not "fix" casually)
 

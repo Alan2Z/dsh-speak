@@ -1,94 +1,207 @@
-// test-speech-hook.js — local smoke test for the new event announcements.
-// Mocks a minimal Cordis ctx + session/event emitter, loads speech-hook.js,
-// and asserts the announced texts for each new event type. Settings namespace
-// registration is expected to fail gracefully here (no dsh-settings in the
-// local resolution path) — that path is verified in the real DSH environment.
+// test-speech-hook.js — smoke test for the merged (1.7.0) event announcements
+// and the two automatic modes (default throttled final reply + queueAllMessages).
+// Mocks a minimal Cordis ctx (timer / webServer / session events), loads
+// speech-hook.js, and asserts the announced texts. The speech queue is async:
+// each item spawns a child whose 'exit' advances the queue, so the mock spawn
+// returns an EventEmitter we can fire to simulate completion.
 'use strict'
 const assert = require('assert')
 const path = require('path')
 const fs = require('fs')
 const cp = require('child_process')
+const { EventEmitter } = require('events')
 
-// Capture spoken text via fs.writeFileSync (property access — mockable).
-// speak() writes the announcement to a temp file before spawning the engine.
+// Route NODE_PATH to the DSH installation so `ws` and schemastery resolve.
+const dshNM = 'E:\\apps\\nvm\\v25.8.0\\node_modules\\@deepseek-ai\\dsh\\node_modules'
+if (process.env.NODE_PATH) process.env.NODE_PATH += path.delimiter + dshNM
+else process.env.NODE_PATH = dshNM
+require('module').Module._initPaths()
+
+// Capture spoken text via fs.writeFileSync; the queue writes a temp file per
+// item before spawning the engine.
 const announced = []
 const origWrite = fs.writeFileSync
 fs.writeFileSync = (file, text, enc) => {
-  if (String(file).includes('dsh-speech-') && String(file).endsWith('.txt')) {
+  // only capture speech temp files (dsh-speech-<ts>-<rand>.txt), NOT the
+  // diagnostic log (dsh-speech-hook.log) which also matches 'dsh-speech-'
+  if (typeof file === 'string' && file.includes('dsh-speech-') && file.endsWith('.txt') && !file.includes('hook.log')) {
     announced.push(String(text))
   }
   return origWrite.call(fs, file, text, enc)
 }
-// Never spawn a real powershell; speech-hook.js destructures spawn at load
-// time, so also stub process.platform to a no-op path is unnecessary — the
-// destructured reference still calls the real spawn. Instead, force the
-// engine script to a nonexistent path so spawn fails harmlessly.
-const realSpawn = cp.spawn
-cp.spawn = () => ({ on() {} })
 
-const listeners = {}
-const ctx = {
-  on(name, cb) { listeners[name] = cb },
-  inject() {},
-  effect() {},
+// Mock spawn: return an EventEmitter so the queue's settle() (exit) can fire.
+const spawned = []
+cp.spawn = (cmd, args, opts) => {
+  const child = new EventEmitter()
+  child.pid = 4242
+  child.kill = () => { child.emit('exit', 0); return true }
+  spawned.push({ cmd, args, child })
+  return child
+}
+
+// --- minimal Cordis ctx factory (fresh listeners per scenario) ---
+function makeCtx() {
+  const listeners = {}
+  const ctx = {
+    on(name, cb) { listeners[name] = cb },
+    inject(services, cb) {
+      // timer: register settings namespace on a tick
+      if (services.includes('timer')) cb({ timer: { timeout: (fn) => { try { fn() } catch (e) { /* settings deps may be absent */ } } }, effect: (fn) => fn() })
+      // webServer: register ws upgrade + control route
+      if (services.includes('webServer')) {
+        cb({
+          webServer: {
+            registerUpgrade: ({ handler }) => { ctx.__wsHandler = handler; return () => {} },
+            register: ({ path, handler }) => { ctx.__routes = ctx.__routes || {}; ctx.__routes[path] = handler; return () => {} },
+          },
+          effect: (fn) => fn(),
+        })
+      }
+    },
+    effect(fn) { return fn ? fn() : () => {} },
+    baseUrl: __filename,
+  }
+  ctx.__fire = (type, data) => { if (listeners['session/event']) listeners['session/event'](null, { type, data }) }
+  // event payload is { type, data: <payload> }; data carries turn/step/message
+  ctx.__fireEvent = (type, payload) => { if (listeners['session/event']) listeners['session/event'](null, { type, data: payload, surfaceOp: 'append' }) }
+  return ctx
 }
 
 const hook = require(path.join(__dirname, '..', 'adapters', 'dsh', 'speech-hook.js'))
-hook.apply(ctx, {
-  announceTurnEnd: true,
-  announceCommandDone: true,
-  announceGoalChange: true,
-  announceToolErrors: true,
-  announceTodoWrite: true,
-})
 
-function fire(type, data) {
-  listeners['session/event'](null, { type, data })
+function applyWith(config) {
+  announced.length = 0
+  spawned.length = 0
+  const ctx = makeCtx()
+  hook.apply(ctx, config)
+  return {
+    fire(type, data) { ctx.__fire(type, data) },
+    fireEvent(type, payload) { ctx.__fireEvent(type, payload) },
+    get __routes() { return ctx.__routes },
+    async flush(n = 50) { await new Promise(r => setTimeout(r, n)) },
+    // complete every spawned child (fire exit) to advance the queue;
+    // the queue is serial: finishing one spawn may spawn the next, so loop
+    // until no new child appears and the queue has drained.
+    async finishAll(rounds = 10) {
+      for (let i = 0; i < rounds; i++) {
+        const current = spawned.splice(0, spawned.length)
+        if (current.length === 0) break
+        current.forEach(({ child }) => { child.emit('exit', 0) })
+        await new Promise(r => setTimeout(r, 10))
+      }
+      spawned.length = 0
+    },
+  }
 }
 
-// turn/end
-fire('turn/end', { turn: 3, reason: { kind: 'completed' } })
-// command/done success + error
-fire('command/done', { kind: 'success' })
-fire('command/done', { kind: 'error' })
-// goal/change create + complete
-fire('goal/change', { operation: 'create', goal: { objective: '重构语音播报模块，让长任务完成时开口告诉你' } })
-fire('goal/change', { operation: 'complete', goal: { objective: '重构语音播报模块' } })
-// tool/result with error + without
-fire('tool/result', { error: { message: 'sandbox denied: file access', code: 'EBLOCKED' } })
-fire('tool/result', { message: { content: [] } })
-// todo/write
-fire('todo/write', { todos: [{ status: 'completed' }, { status: 'in_progress' }, { status: 'pending' }] })
+async function main() {
+  // ---- 1. default mode: optional events + throttled final reply ----
+  const t1 = applyWith({ announceTurnEnd: true, announceCommandDone: true, announceGoalChange: true, announceToolErrors: true, announceTodoWrite: true, throttleMs: 10 })
+  t1.fire('turn/end', { turn: 3, reason: { kind: 'completed' } })
+  t1.fire('command/done', { kind: 'error' })
+  t1.fire('goal/change', { operation: 'create', goal: { objective: '重构语音播报模块，让长任务完成时开口告诉你' } })
+  t1.fire('tool/result', { error: { name: 'Error', code: 'EBLOCKED' } }) // 真实结构：只有 name/code
+  t1.fire('todo/write', { todos: [{ status: 'completed' }, { status: 'in_progress' }, { status: 'pending' }] })
+  await t1.finishAll() // complete each queued item serially
+  await t1.flush(20)
+  console.log('--- default mode announced ---')
+  announced.forEach((t, i) => console.log(`[${i}] ${t}`))
+  assert.strictEqual(announced[0], '第 3 轮对话完成', 'turn/end completed')
+  assert.strictEqual(announced[1], '命令执行失败', 'command/done error')
+  assert.ok(announced[2].startsWith('已创建目标：重构语音播报模块'), `goal create: ${announced[2]}`)
+  assert.strictEqual(announced[3], '工具调用出错：EBLOCKED', 'tool error code')
+  assert.strictEqual(announced[4], '待办已更新：1/3 完成', 'todo write')
 
-// ---- master switch: disabled → nothing announces ----
-const countBefore = announced.length
-const hook2 = require(path.join(__dirname, '..', 'adapters', 'dsh', 'speech-hook.js'))
-hook2.apply(ctx, {
-  enabled: false, // 总开关关闭
-  announceTurnEnd: true,
-  announceCommandDone: true,
-  announceGoalChange: true,
-  announceToolErrors: true,
-  announceTodoWrite: true,
-})
-fire('turn/end', { turn: 7, reason: { kind: 'completed' } })
-fire('command/done', { kind: 'success' })
-fire('goal/change', { operation: 'create', goal: { objective: '总开关关闭时不应播报' } })
-fire('tool/result', { error: { message: 'should not speak', code: 'E2' } })
-fire('todo/write', { todos: [{ status: 'completed' }] })
-fire('assistant/message', { surfaceOp: 'append', data: { message: { content: [{ type: 'text', text: '最终回复也不应播报' }] } } })
+  // ---- 2. default mode: throttled final reply ----
+  const t2 = applyWith({ throttleMs: 10 })
+  t2.fireEvent('assistant/message', { turn: 5, step: 1, message: { id: 'm1', content: [{ type: 'text', text: '这是最终回复内容。' }] } })
+  await t2.flush(30) // wait for throttle to fire + enqueue
+  await t2.finishAll()
+  await t2.flush(20)
+  assert.ok(announced.includes('这是最终回复内容。'), `final reply announced: ${JSON.stringify(announced)}`)
 
-console.log('--- master switch off: announced count delta =', announced.length - countBefore, '---')
-assert.strictEqual(announced.length, countBefore, '总开关关闭时任何事件都不应播报')
+  // ---- 3. master switch off: nothing announced ----
+  const t3 = applyWith({ enabled: false, announceTurnEnd: true, throttleMs: 10 })
+  t3.fire('turn/end', { turn: 7, reason: { kind: 'completed' } })
+  t3.fireEvent('assistant/message', { turn: 8, step: 1, message: { id: 'm2', content: [{ type: 'text', text: '总开关关闭' }] } })
+  await t3.flush(40)
+  await t3.finishAll()
+  await t3.flush(20)
+  assert.strictEqual(announced.length, 0, `master switch off should announce nothing: ${JSON.stringify(announced)}`)
 
-console.log('--- announced texts ---')
-announced.forEach((t, i) => console.log(`[${i}] ${t}`))
-console.log('--- assertions ---')
-assert.strictEqual(announced[0], '第 3 轮对话完成', 'turn/end completed')
-assert.strictEqual(announced[1], '命令执行完成', 'command/done success')
-assert.strictEqual(announced[2], '命令执行失败', 'command/done error')
-assert.ok(announced[3].startsWith('已创建目标：重构语音播报模块'), `goal create: ${announced[3]}`)
-assert.strictEqual(announced[4], '目标已完成：重构语音播报模块', 'goal complete')
-assert.ok(announced[5].startsWith('工具调用出错：sandbox denied'), `tool error: ${announced[5]}`)
-assert.strictEqual(announced[6], '待办已更新：1/3 完成', 'todo write')
-console.log('ALL PASS ✓')
+  // ---- 4. queueAllMessages mode: every assistant message enqueued ----
+  const t4 = applyWith({ queueAllMessages: true, automaticSpeech: true, throttleMs: 10 })
+  t4.fireEvent('assistant/message', { turn: 9, step: 1, message: { id: 'q1', content: [{ type: 'text', text: '中间消息一' }] } })
+  t4.fireEvent('assistant/message', { turn: 9, step: 2, message: { id: 'q2', content: [{ type: 'text', text: '中间消息二' }] } })
+  await t4.flush(30)
+  await t4.finishAll()
+  await t4.flush(20)
+  assert.ok(announced.includes('中间消息一'), `queueAllMessages should speak intermediate: ${JSON.stringify(announced)}`)
+  assert.ok(announced.includes('中间消息二'), `queueAllMessages should speak second message: ${JSON.stringify(announced)}`)
+
+  // ---- 5. control route registered (via a fresh apply) ----
+  const t5 = applyWith({})
+  assert.ok(t5.__routes && t5.__routes['/dsh-speak/control'], 'control route registered')
+
+  // ---- 6. turn/end fallback: tool-call round still announces the final reply ----
+  const t6 = applyWith({ throttleMs: 10 })
+  t6.fireEvent('assistant/message', { turn: 10, step: 1, message: { id: 'f1', content: [{ type: 'text', text: '这是带工具调用的最终回复。' }] } })
+  t6.fire('tool/call', { name: 'pwsh', arguments: '{}' }) // cancels the throttle
+  t6.fire('turn/end', { turn: 10, reason: { kind: 'completed' } }) // fallback speaks it
+  await t6.flush(20)
+  await t6.finishAll()
+  await t6.flush(20)
+  assert.ok(announced.includes('这是带工具调用的最终回复。'), `turn/end fallback should speak final reply: ${JSON.stringify(announced)}`)
+
+  // ---- 7. no double speak: pure-text reply (already throttled) + turn/end ----
+  const t7 = applyWith({ throttleMs: 10 })
+  t7.fireEvent('assistant/message', { turn: 11, step: 1, message: { id: 'p1', content: [{ type: 'text', text: '纯文本最终回复' }] } })
+  await t7.flush(30) // throttle fires first → lastSpokenText set
+  t7.fire('turn/end', { turn: 11, reason: { kind: 'completed' } }) // must NOT repeat
+  await t7.flush(20)
+  await t7.finishAll()
+  await t7.flush(20)
+  const repeats = announced.filter(t => t === '纯文本最终回复').length
+  assert.strictEqual(repeats, 1, `pure-text reply must speak exactly once: ${JSON.stringify(announced)}`)
+
+  // ---- 8. ask_user_question: question spoken, turn/end must not repeat the message text ----
+  const t8 = applyWith({ announceQuestions: true, throttleMs: 10 })
+  t8.fireEvent('assistant/message', { turn: 12, step: 1, message: { id: 'q3', content: [{ type: 'text', text: '你需要哪个方案？' }] } })
+  t8.fire('tool/call', { name: 'ask_user_question', arguments: JSON.stringify({ questions: [{ question: '选哪个？', options: [{ label: 'A' }, { label: 'B' }] }] }) })
+  t8.fire('turn/end', { turn: 12, reason: { kind: 'completed' } })
+  await t8.flush(20)
+  await t8.finishAll()
+  await t8.flush(20)
+  assert.ok(announced.some(t => t.includes('选哪个？')), `question announced: ${JSON.stringify(announced)}`)
+  assert.ok(!announced.includes('你需要哪个方案？'), `question text must not repeat at turn/end: ${JSON.stringify(announced)}`)
+
+  // ---- 9. Windows spawn passes booleans as 1/0 (PowerShell [bool] rejects "true") ----
+  const t9 = applyWith({ throttleMs: 10 })
+  t9.fireEvent('assistant/message', { turn: 13, step: 1, message: { id: 'b1', content: [{ type: 'text', text: '布尔参数测试' }] } })
+  await t9.flush(30)
+  const ps = spawned.find(s => s.cmd === 'powershell.exe')
+  assert.ok(ps, 'powershell spawned')
+  const psArgs = ps.args
+  for (const flag of ['-CleanMarkdownFormatting', '-ReadInlineCode']) {
+    const idx = psArgs.indexOf(flag)
+    assert.ok(idx >= 0 && (psArgs[idx + 1] === '1' || psArgs[idx + 1] === '0'),
+      `${flag} must be 1/0, got ${JSON.stringify(psArgs.slice(idx, idx + 2))}`)
+  }
+  await t9.finishAll()
+  await t9.flush(20)
+
+  // ---- 10. tool/result isError block (pwsh-style failure, no error field) ----
+  const t10 = applyWith({ announceToolErrors: true, throttleMs: 10 })
+  t10.fire('tool/result', { message: { content: [{ type: 'text', text: 'Cannot find path because it does not exist', isError: true }] } })
+  await t10.flush(20)
+  await t10.finishAll()
+  await t10.flush(20)
+  assert.ok(announced.some(t => t === '工具调用出错：Cannot find path because it does not exist'),
+    `isError block announced: ${JSON.stringify(announced)}`)
+
+  console.log('ALL PASS ✓')
+  process.exit(0)
+}
+
+main().catch(e => { console.error('FAIL:', e.message); process.exit(1) })
