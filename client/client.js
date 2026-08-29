@@ -276,7 +276,15 @@ window.__ModuleLoader__.load({
         return e('div', { className: 'dsh-speak-field' }, inline ? e('div', { className: 'dsh-speak-inline-field' }, e('div', { className: 'dsh-speak-field-label' }, label), children) : e('div', { className: 'dsh-speak-field-label' }, label), inline ? null : children, e('p', { className: 'dsh-speak-field-hint' }, hint))
       }
       function Toggle({ label, value, disabled, onChange, hint }) { return e(Field, { label: `${label}:`, hint, inline: true }, e('div', { className: 'dsh-speak-option-row' }, e(Button, { variant: 'outline', size: 'sm', disabled, 'aria-pressed': value, onClick: () => onChange(!value) }, value ? t('toggleOn') : t('toggleOff')))) }
-      function SettingInput({ label, value, disabled, numeric, onChange, hint }) { const id = `dsh-speak-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`; return e(Field, { label: `${label}:`, hint }, e('div', { className: 'dsh-speak-input-row' }, e(Input, { id, value: String(value), disabled, inputMode: numeric ? 'numeric' : undefined, onChange: event => onChange(event.target.value) }))) }
+      function SettingInput({ label, value, disabled, numeric, onChange, hint }) {
+        const id = `dsh-speak-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
+        // 缓冲输入：受控 value 来自配置，直接绑定会让"-"这类中间态被弹回
+        // （Number('-') = NaN 拒绝后 value 不变），负数字段无法输入。这里用
+        // 局部 state 缓冲，输入过程自由，onChange 里校验合法后才写配置。
+        const [text, setText] = React.useState(String(value))
+        React.useEffect(() => { setText(String(value)) }, [value])
+        return e(Field, { label: `${label}:`, hint }, e('div', { className: 'dsh-speak-input-row' }, e(Input, { id, value: text, disabled, inputMode: numeric ? 'numeric' : undefined, onChange: event => { setText(event.target.value); onChange(event.target.value) } })))
+      }
       function Options({ label, value, disabled, onChange, hint, options }) { return e(Field, { label, hint }, e('div', { className: 'dsh-speak-option-row' }, ...options.map(option => e(Button, { key: option.value, variant: value === option.value ? 'primary' : 'outline', size: 'sm', disabled, 'aria-pressed': value === option.value, onClick: () => onChange(option.value) }, option.label)))) }
       function MarkdownCleaning({ value, clean, disabled, set }) {
         const [open, setOpen] = React.useState(true); const controlsDisabled = disabled || !clean
@@ -302,7 +310,7 @@ window.__ModuleLoader__.load({
           e(Toggle, { label: t('cleanMarkdown'), value: clean, disabled, onChange: next => set('cleanMarkdownFormatting', next), hint: t('cleanMarkdownHint') }), e(MarkdownCleaning, { value, clean, disabled, set }),
           e(SettingInput, { label: t('maxChars'), value: value.maxChars == null ? 0 : value.maxChars, numeric: true, disabled, onChange: next => { if (/^\d+$/.test(next)) set('maxChars', Number(next)) }, hint: t('maxCharsHint') }),
           e(SettingInput, { label: t('volume'), value: value.volume == null ? 50 : value.volume, numeric: true, disabled, onChange: next => { if (/^\d+$/.test(next)) set('volume', Number(next)) }, hint: t('volumeHint') }),
-          e(SettingInput, { label: t('rate'), value: value.rate == null ? 0 : value.rate, numeric: true, disabled, onChange: next => { if (/^-?\d*\.?\d*$/.test(next)) set('rate', Number(next)) }, hint: isMac ? t('rateHintMac') : t('rateHintWin') }),
+          e(SettingInput, { label: t('rate'), value: value.rate == null ? 0 : value.rate, numeric: true, disabled, onChange: next => { if (/^-?\d*\.?\d*$/.test(next)) { const n = Number(next); if (Number.isFinite(n)) set('rate', n) } }, hint: isMac ? t('rateHintMac') : t('rateHintWin') }),
           e(SettingInput, { label: t('engine'), value: value.engine || '', disabled, onChange: next => set('engine', next), hint: t('engineHint') }),
           e(Options, { label: t('longTextBehavior'), value: value.longTextMode || 'message', disabled, onChange: next => set('longTextMode', next), hint: t('longTextBehaviorHint'), options: [{ value: 'message', label: t('longTextMessageOption') }, { value: 'heading', label: t('longTextHeadingOption') }] }),
           e(SettingInput, { label: t('fixedPrompt'), value: value.longTextMessage || '本次播报内容较长，请自行阅读。', disabled: disabled || value.longTextMode !== 'message', onChange: next => set('longTextMessage', next), hint: t('fixedPromptHint') }),
