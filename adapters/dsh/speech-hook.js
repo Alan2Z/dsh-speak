@@ -90,6 +90,7 @@ const SCHEMA_DEFAULTS = {
   announceApprovals: true,
   announceQuestions: true,
   stripApprovalPrefix: true,
+  questionGapMs: 2000,
   longTextMode: 'message',
   longTextMessage: '本次播报内容较长，请自行阅读。',
   maxChars: DEFAULT_MAX_CHARS,
@@ -123,6 +124,7 @@ function resolveConfig(value) {
     announceApprovals: value.announceApprovals !== false,
     announceQuestions: value.announceQuestions !== false,
     stripApprovalPrefix: value.stripApprovalPrefix !== false,
+    questionGapMs: Math.max(0, Number(value.questionGapMs != null ? value.questionGapMs : 2000)) || 0,
     longTextMode: value.longTextMode === 'heading' ? 'heading' : 'message',
     longTextMessage: String(value.longTextMessage || SCHEMA_DEFAULTS.longTextMessage),
     maxChars: Number(value.maxChars != null ? value.maxChars : DEFAULT_MAX_CHARS) || 0,
@@ -159,6 +161,7 @@ function buildSettingsNamespace(ctx, patch) {
       announceApprovals: z.boolean().default(true),
       announceQuestions: z.boolean().default(true),
       stripApprovalPrefix: z.boolean().default(true),
+      questionGapMs: z.natural().default(2000),
       longTextMode: z.union(['message', 'heading']).default('message'),
       longTextMessage: z.string().default('本次播报内容较长，请自行阅读。'),
       maxChars: z.natural().default(DEFAULT_MAX_CHARS),
@@ -214,6 +217,8 @@ module.exports = {
     let activeSpeech = null
     let speechToken = 0
     let replacement = null
+    /** 队列项播完后的停顿定时器（多问题提问之间的间隔） */
+    let gapTimer = null
     const speechQueue = []
     const speechSockets = new Set()
     const speechWss = new WebSocketServer({ noServer: true })
@@ -256,19 +261,29 @@ module.exports = {
         child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', cfg.engine, '-File', tmp, '-Volume', String(cfg.volume), '-Rate', String(cfg.rate > 0 ? cfg.rate : 1), '-MaxChars', String(cfg.maxChars), '-LongTextMode', cfg.longTextMode, '-LongTextMessage', cfg.longTextMessage, '-CleanMarkdownFormatting', cfg.cleanMarkdownFormatting ? '1' : '0', '-ReadInlineCode', cfg.readInlineCode ? '1' : '0', '-CodeBlocks', cfg.codeBlocks, '-CodeBlockMaxChars', String(cfg.codeBlockMaxChars), '-CodeBlockReplacementText', cfg.codeBlockReplacementText], { windowsHide: true, stdio: 'ignore' })
       }
       const token = ++speechToken
-      activeSpeech = { process: child, tmp, token, item }
+      activeSpeech = { process: child, tmp, token, item, gapMs: item.gapMs || 0 }
       publishState()
       const settle = () => {
         removeTemp(tmp)
         if (!activeSpeech || activeSpeech.token !== token) return
+        const gap = activeSpeech.gapMs || 0
         activeSpeech = null
         publishState()
-        if (replacement) {
-          const next = replacement
-          replacement = null
-          startOne(next)
+        const proceed = () => {
+          gapTimer = null
+          if (replacement) {
+            const next = replacement
+            replacement = null
+            startOne(next)
+          } else {
+            startNext()
+          }
+        }
+        // 队列项之间可配置停顿（如多个提问之间留 2 秒）
+        if (gap > 0) {
+          gapTimer = setTimeout(proceed, gap)
         } else {
-          startNext()
+          proceed()
         }
       }
       child.once('exit', settle)
@@ -298,11 +313,13 @@ module.exports = {
       return true
     }
     function clearAndStop() {
+      if (gapTimer) { clearTimeout(gapTimer); gapTimer = null }
       speechQueue.length = 0
       publishState()
       return stopActive()
     }
     function replaceWith(item) {
+      if (gapTimer) { clearTimeout(gapTimer); gapTimer = null }
       speechQueue.length = 0
       replacement = item
       publishState()
@@ -406,20 +423,37 @@ module.exports = {
         // other tool call cancels the pending throttled narration
         if (type === 'tool/call') {
           if (event.data && event.data.name === 'ask_user_question' && cfg.announceQuestions) {
-            let text = ''
+            let items = []
             try {
               const args = JSON.parse(event.data.arguments || '{}')
-              text = (Array.isArray(args.questions) ? args.questions : []).map(question => {
+              const questions = Array.isArray(args.questions) ? args.questions : []
+              // 每个问题单独入队播报：带"问题N"序号（多问题时）与"选项N"序号
+              // （序号用数字，与 UI 的自动编号一致；中文 TTS 自然读成"一/二/三"）
+              items = questions.map((question, qi) => {
                 const mode = question.multi_select ? '多选' : '单选'
-                const labels = Array.isArray(question.options) ? question.options.map(option => option.label).filter(Boolean).join('、') : ''
-                return `${question.question || ''}（${mode}）${labels ? '，选项：' + labels : ''}`
-              }).filter(Boolean).join('；')
+                const opts = Array.isArray(question.options) ? question.options : []
+                const optText = opts.map((option, oi) => {
+                  const label = option && option.label ? String(option.label) : ''
+                  return label ? `选项${oi + 1}，${label}` : ''
+                }).filter(Boolean).join('；')
+                const head = questions.length > 1 ? `问题${qi + 1}，` : ''
+                // question 文案已含"单选/多选"字样时不再追加模式后缀，避免重复
+                const modeSuffix = /单选|多选/.test(question.question || '') ? '' : `（${mode}）`
+                const body = [question.question || '', modeSuffix, optText ? '，' + optText : ''].join('')
+                return (head + body).trim()
+              }).filter(Boolean)
             } catch (e) { /* ignore malformed arguments */ }
-            if (text) {
+            if (items.length > 0) {
               cancelPending()
               // 问题已单独播报，标记当前最后文本为已播，避免 turn/end 兜底重复
               lastSpokenText = lastText
-              enqueue(hostItem('question', session, event, text, null))
+              // 多条问题按 FIFO 串行播报，之间停顿 cfg.questionGapMs（默认 2 秒）
+              const gap = cfg.questionGapMs > 0 && items.length > 1 ? cfg.questionGapMs : 0
+              items.forEach((itemText, i) => {
+                const item = hostItem('question', session, event, itemText, null)
+                item.gapMs = i < items.length - 1 ? gap : 0
+                enqueue(item)
+              })
             }
             return
           }

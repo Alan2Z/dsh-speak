@@ -273,6 +273,7 @@ document):
         announceApprovals: true # speak approval requests
         announceQuestions: true # speak ask_user_question content
         stripApprovalPrefix: true  # strip "escalate sandbox to ...: " prefix
+        questionGapMs: 2000      # pause between multiple question announcements (ms)
         longTextMode: message   # message | heading (speak largest md heading)
         longTextMessage: '本次播报内容较长，请自行阅读。' # fixed prompt for message mode
         maxChars: 300           # per-utterance ceiling (macOS default 0 = unlimited)
@@ -305,7 +306,8 @@ document):
 | `throttleMs` | `1500` | how long a reply's text waits before being announced (merges multi-step messages) |
 | `engine` | `''` | explicit engine script path; `''` auto-resolves: `<package>/engine/<platform>` → `~/.dsh/hooks/<platform>` |
 | `announceApprovals` | `true` | announce `approval/asked` events (reason, or the fixed prompt) |
-| `announceQuestions` | `true` | announce `ask_user_question` calls as "question（单选/多选），选项：…" |
+| `announceQuestions` | `true` | announce `ask_user_question`: each question spoken separately with a "问题N" prefix (when several) and "选项N" prefixes matching the UI numbering; a `questionGapMs` pause between questions |
+| `questionGapMs` | `2000` | pause between multiple question announcements (ms); 0 = no pause |
 | `stripApprovalPrefix` | `true` | strip the fixed English template prefix (`escalate sandbox to danger-full-access: `) from approval reasons, keeping the human explanation |
 | `longTextMode` | `message` | `message` = fixed prompt for over-long text; `heading` = speak the largest markdown heading instead (see below) |
 | `longTextMessage` | `本次播报内容较长，请自行阅读。` | the fixed prompt spoken for over-long text in `message` mode (editable in the UI) |

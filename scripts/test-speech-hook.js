@@ -165,7 +165,7 @@ async function main() {
   const repeats = announced.filter(t => t === '纯文本最终回复').length
   assert.strictEqual(repeats, 1, `pure-text reply must speak exactly once: ${JSON.stringify(announced)}`)
 
-  // ---- 8. ask_user_question: question spoken, turn/end must not repeat the message text ----
+  // ---- 8. ask_user_question: numbered options, turn/end must not repeat ----
   const t8 = applyWith({ announceQuestions: true, throttleMs: 10 })
   t8.fireEvent('assistant/message', { turn: 12, step: 1, message: { id: 'q3', content: [{ type: 'text', text: '你需要哪个方案？' }] } })
   t8.fire('tool/call', { name: 'ask_user_question', arguments: JSON.stringify({ questions: [{ question: '选哪个？', options: [{ label: 'A' }, { label: 'B' }] }] }) })
@@ -173,7 +173,8 @@ async function main() {
   await t8.flush(20)
   await t8.finishAll()
   await t8.flush(20)
-  assert.ok(announced.some(t => t.includes('选哪个？')), `question announced: ${JSON.stringify(announced)}`)
+  assert.ok(announced.some(t => t === '选哪个？（单选），选项1，A；选项2，B'),
+    `single question with numbered options: ${JSON.stringify(announced)}`)
   assert.ok(!announced.includes('你需要哪个方案？'), `question text must not repeat at turn/end: ${JSON.stringify(announced)}`)
 
   // ---- 9. Windows spawn passes booleans as 1/0 (PowerShell [bool] rejects "true") ----
@@ -199,6 +200,24 @@ async function main() {
   await t10.flush(20)
   assert.ok(announced.some(t => t === '工具调用出错：Cannot find path because it does not exist'),
     `isError block announced: ${JSON.stringify(announced)}`)
+
+  // ---- 11. multi-question: each question separate, numbered, gap between ----
+  const t11 = applyWith({ announceQuestions: true, questionGapMs: 2000, throttleMs: 10 })
+  t11.fire('tool/call', { name: 'ask_user_question', arguments: JSON.stringify({ questions: [
+    { question: '选部署方案？', options: [{ label: '方案A' }, { label: '方案B' }] },
+    { question: '通知方式？', multi_select: true, options: [{ label: '邮件' }, { label: '短信' }, { label: '无' }] },
+  ] }) })
+  await t11.flush(20)
+  await t11.finishAll() // 完成第一条 → 进入 2000ms 间隔
+  await t11.flush(2100) // 等间隔到期 → 第二条才 spawn
+  await t11.finishAll() // 完成第二条
+  await t11.flush(20)
+  assert.ok(announced.includes('问题1，选部署方案？（单选），选项1，方案A；选项2，方案B'),
+    `q1 numbered: ${JSON.stringify(announced)}`)
+  assert.ok(announced.includes('问题2，通知方式？（多选），选项1，邮件；选项2，短信；选项3，无'),
+    `q2 numbered + multi: ${JSON.stringify(announced)}`)
+  // 两条之间确实有 2 秒间隔：第二条不可能在第一条完成后立刻播
+  assert.ok(announced.length >= 2, `both questions announced: ${JSON.stringify(announced)}`)
 
   console.log('ALL PASS ✓')
   process.exit(0)

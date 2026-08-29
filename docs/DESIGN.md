@@ -198,7 +198,7 @@ returns immediately. (Async spawning is safe here — the nested-spawn restricti
 | -------------------------------- | ----------- |
 | final text reply, no tool call   | ✅ after throttle |
 | text + tool/call(s)              | 🟡 throttle cancelled (intermediate); **fallback-announced at turn end** |
-| text + `ask_user_question` call  | ✅ the question text is kept and announced |
+| text + `ask_user_question` call  | ✅ each question announced separately: "问题N" prefix (when several) + "选项N" numbering, `questionGapMs` pause between questions |
 | `approval/asked`                 | ✅ immediately (reason, else a fixed prompt) |
 | reasoning only, no text          | ❌ (no text block) |
 | streaming chunks                 | ❌ (filtered) |
@@ -246,6 +246,7 @@ config:
   announceApprovals: true
   announceQuestions: true
   stripApprovalPrefix: true
+  questionGapMs: 2000          # pause between multiple question announcements (ms)
   longTextMode: message        # message | heading
   longTextMessage: '本次播报内容较长，请自行阅读。'
   maxChars: 300                # macOS default 0 = unlimited

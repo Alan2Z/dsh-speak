@@ -252,6 +252,7 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
         announceApprovals: true # 播报审批请求
         announceQuestions: true # 播报 ask_user_question 提问内容
         stripApprovalPrefix: true  # 剥离审批原因里的 "escalate sandbox to ...: " 前缀
+        questionGapMs: 2000      # 多个提问播报之间的停顿（毫秒）
         longTextMode: message   # message | heading（念最大字号 markdown 标题）
         longTextMessage: '本次播报内容较长，请自行阅读。' # message 模式下的固定提示语
         maxChars: 300           # 引擎单次朗读字数上限（macOS 默认 0 = 不限）
@@ -284,7 +285,8 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
 | `throttleMs` | `1500` | 回复文本等待多久才播报（合并同一回复的多步消息） |
 | `engine` | `''` | 显式引擎脚本路径；`''` 自动解析：包内 `engine/<平台>` → `~/.dsh/hooks/<平台>` |
 | `announceApprovals` | `true` | 播报 `approval/asked` 事件（审批原因，或固定提示语） |
-| `announceQuestions` | `true` | 把 `ask_user_question` 调用播报成"问题（单选/多选），选项：…" |
+| `announceQuestions` | `true` | 播报 `ask_user_question`：每个问题单独朗读，带"问题N"序号（多问题时）与"选项N"序号（与 UI 编号一致）；多个问题之间停顿 `questionGapMs` |
+| `questionGapMs` | `2000` | 多个提问播报之间的停顿（毫秒），0 = 不停顿 |
 | `stripApprovalPrefix` | `true` | 剥离审批原因里的固定英文模板前缀（`escalate sandbox to danger-full-access: `），保留中文说明 |
 | `longTextMode` | `message` | `message` = 超长念固定提示语；`heading` = 改念最大字号 markdown 标题（规则见下） |
 | `longTextMessage` | `本次播报内容较长，请自行阅读。` | `message` 模式下超长文本改念的固定提示语（UI 可编辑） |

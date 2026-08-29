@@ -177,7 +177,7 @@ Claude Code *确实*有 Stop hook。hook JSON（含 `transcript_path`）从 stdi
 | -------------------------------- | -------- |
 | 最终文本回复，无工具调用         | ✅ 节流后播报 |
 | 文本 + tool/call(s)              | 🟡 节流被取消（中间轮次）；**回合结束时兜底补播最终回复** |
-| 文本 + `ask_user_question` 调用  | ✅ 保留提问文本并播报 |
+| 文本 + `ask_user_question` 调用  | ✅ 每个问题单独播报："问题N"（多问题时）+ "选项N"序号，问题间停顿 `questionGapMs` |
 | `approval/asked`（审批请求）     | ✅ 立即播报（审批原因，否则固定提示语） |
 | 只有 reasoning，无文本           | ❌（无 text 块） |
 | 流式分块                         | ❌（被过滤） |
@@ -226,6 +226,7 @@ config:
   announceApprovals: true
   announceQuestions: true
   stripApprovalPrefix: true
+  questionGapMs: 2000          # 多个提问播报之间的停顿（毫秒）
   longTextMode: message        # message | heading
   longTextMessage: '本次播报内容较长，请自行阅读。'
   maxChars: 300                # macOS 默认 0 = 不限
