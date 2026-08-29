@@ -1,6 +1,6 @@
 {
   "name": "dsh-speak",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "description": "Make your AI harness speak — voice announcements for DSH and other AI coding harnesses (Windows SAPI5 + macOS system voices)",
   "main": "adapters/dsh/speech-hook.js",
   "exports": {
