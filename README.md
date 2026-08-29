@@ -263,6 +263,7 @@ document):
         enabled: true           # master switch: false silences everything
         automaticSpeech: true   # auto-speak final replies
         queueAllMessages: false # true = enqueue every assistant message as it arrives
+        replayFullRead: false   # true = manual replay skips the long-text truncation, reads everything
         cleanMarkdownFormatting: true # convert Markdown to natural speech
         readInlineCode: true    # read inline code without backticks
         codeBlocks: smart       # all | smart | replace (fenced code blocks)
@@ -298,6 +299,7 @@ document):
 | `enabled` | `true` | **master switch**: when off, nothing is ever announced (final reply / approvals / questions / optional events / replay) |
 | `automaticSpeech` | `true` | auto-speak final replies; manual replay always remains available |
 | `queueAllMessages` | `false` | `true` enqueues every assistant message as it arrives (intermediate messages spoken too, FIFO); default only speaks the throttled final reply |
+| `replayFullRead` | `false` | `true` makes manual replay skip the long-text heading truncation (`longTextMode: heading`) and read everything in chunks |
 | `cleanMarkdownFormatting` | `true` | converts Markdown into natural speech text (link labels kept, URLs/heading/emphasis cleaned) |
 | `readInlineCode` | `true` | read inline code without backtick markers |
 | `codeBlocks` | `smart` | fenced code blocks: `all` read / `smart` (read when ≤ `codeBlockMaxChars`) / `replace` with the replacement text |

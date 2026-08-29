@@ -242,6 +242,7 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
         enabled: true           # 总开关：false 时完全不播报
         automaticSpeech: true   # 自动朗读最终回复
         queueAllMessages: false # true = 所有 assistant 消息立即入队朗读（中间消息也读）
+        replayFullRead: false   # true = 手动重播跳过超长文本截断，完整朗读
         cleanMarkdownFormatting: true # Markdown 转自然语音
         readInlineCode: true    # 朗读行内代码（去掉反引号）
         codeBlocks: smart       # all | smart | replace（围栏代码块）
@@ -277,6 +278,7 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
 | `enabled` | `true` | **总开关**：关闭后所有播报都不触发（最终回复/审批/提问/可选事件/重播） |
 | `automaticSpeech` | `true` | 自动朗读最终回复；手动重播始终可用 |
 | `queueAllMessages` | `false` | `true` 时每条 assistant 消息立即入队朗读（中间消息也读，FIFO）；默认只读节流后的最终回复 |
+| `replayFullRead` | `false` | `true` 时手动重播跳过超长文本的标题截断（`longTextMode: heading`），完整分段朗读 |
 | `cleanMarkdownFormatting` | `true` | 把 Markdown 转成自然语音文本（链接保留文字去 URL、标题/强调符号清理） |
 | `readInlineCode` | `true` | 朗读行内代码（去掉反引号标记） |
 | `codeBlocks` | `smart` | 围栏代码块处理：`all` 全读 / `smart`（≤`codeBlockMaxChars` 才读）/ `replace` 用替代文本 |

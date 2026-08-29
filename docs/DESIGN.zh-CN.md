@@ -216,6 +216,7 @@ config:
   enabled: true                # 总开关
   automaticSpeech: true        # 自动朗读最终回复
   queueAllMessages: false      # true = 所有 assistant 消息立即入队
+  replayFullRead: false        # true = 手动重播跳过超长文本截断，完整朗读
   cleanMarkdownFormatting: true
   readInlineCode: true
   codeBlocks: smart            # all | smart | replace

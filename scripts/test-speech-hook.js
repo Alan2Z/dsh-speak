@@ -219,6 +219,40 @@ async function main() {
   // 两条之间确实有 2 秒间隔：第二条不可能在第一条完成后立刻播
   assert.ok(announced.length >= 2, `both questions announced: ${JSON.stringify(announced)}`)
 
+  // ---- 12. replay full read: control play passes -FullRead per replayFullRead ----
+  async function controlPlay(routes, body) {
+    const route = routes['/dsh-speak/control']
+    const bodyBuf = Buffer.from(JSON.stringify(body))
+    const req = {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      [Symbol.asyncIterator]() { let sent = false; return { next: async () => sent ? { done: true } : (sent = true, { value: bodyBuf, done: false }) } },
+    }
+    let status = 0, payload = ''
+    const res = { writeHead: (s) => { status = s }, end: (v) => { payload = String(v) } }
+    await route(req, res)
+    return { status, payload }
+  }
+  const t12 = applyWith({ replayFullRead: true, throttleMs: 10 })
+  await controlPlay(t12.__routes, { action: 'play', text: '重播完整朗读测试' })
+  await t12.flush(20)
+  const ps12 = spawned.find(s => s.cmd === 'powershell.exe')
+  assert.ok(ps12, 'manual play spawned powershell')
+  const idx12 = ps12.args.indexOf('-FullRead')
+  assert.ok(idx12 >= 0 && ps12.args[idx12 + 1] === '1', `replayFullRead on → -FullRead 1: ${JSON.stringify(ps12.args.slice(idx12, idx12 + 2))}`)
+  await t12.finishAll()
+  await t12.flush(20)
+
+  const t13 = applyWith({ replayFullRead: false, throttleMs: 10 })
+  await controlPlay(t13.__routes, { action: 'play', text: '重播走heading' })
+  await t13.flush(20)
+  const ps13 = spawned.find(s => s.cmd === 'powershell.exe')
+  assert.ok(ps13, 'manual play spawned powershell (off)')
+  const idx13 = ps13.args.indexOf('-FullRead')
+  assert.ok(idx13 >= 0 && ps13.args[idx13 + 1] === '0', `replayFullRead off → -FullRead 0: ${JSON.stringify(ps13.args.slice(idx13, idx13 + 2))}`)
+  await t13.finishAll()
+  await t13.flush(20)
+
   console.log('ALL PASS ✓')
   process.exit(0)
 }

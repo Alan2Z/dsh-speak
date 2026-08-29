@@ -19,13 +19,14 @@ READ_INLINE_CODE=1
 CODE_BLOCKS="smart"
 CODE_BLOCK_MAX_CHARS=300
 CODE_BLOCK_REPLACEMENT="You can see the code in our history."
+FULL_READ=0
 
 usage() {
-  echo "usage: speak.sh [-t text | -f file] [-v voice] [-r wpm] [-m maxchars] [-l longmsg] [-M message|heading] [-C 0|1] [-I 0|1] [-B all|smart|replace] [-K codechars] [-R replacement]" >&2
+  echo "usage: speak.sh [-t text | -f file] [-v voice] [-r wpm] [-m maxchars] [-l longmsg] [-M message|heading] [-C 0|1] [-I 0|1] [-B all|smart|replace] [-K codechars] [-R replacement] [-F]" >&2
   exit 1
 }
 
-while getopts "t:f:v:r:m:l:M:C:I:B:K:R:h" opt; do
+while getopts "t:f:v:r:m:l:M:C:I:B:K:R:Fh" opt; do
   case "$opt" in
     t) TEXT="$OPTARG" ;;
     f) FILE="$OPTARG" ;;
@@ -39,6 +40,7 @@ while getopts "t:f:v:r:m:l:M:C:I:B:K:R:h" opt; do
     B) CODE_BLOCKS="$OPTARG" ;;
     K) CODE_BLOCK_MAX_CHARS="$OPTARG" ;;
     R) CODE_BLOCK_REPLACEMENT="$OPTARG" ;;
+    F) FULL_READ=1 ;;
     h) usage ;;
     *) usage ;;
   esac
@@ -51,7 +53,8 @@ fi
 [ -n "$TEXT" ] || exit 0
 
 # `heading` is meaningful only when a positive long-text ceiling is configured.
-if [ "$MAX_CHARS" -gt 0 ] && [ "${#TEXT}" -gt "$MAX_CHARS" ] && [ "$LONG_MODE" = "heading" ]; then
+# -F (full read, manual replay) skips this guard entirely.
+if [ "$FULL_READ" != "1" ] && [ "$MAX_CHARS" -gt 0 ] && [ "${#TEXT}" -gt "$MAX_CHARS" ] && [ "$LONG_MODE" = "heading" ]; then
   TEXT=$(printf '%s' "$TEXT" | /usr/bin/perl -CSD -e '
     my $best = 7; my $cand = ""; my $first = "";
     while (<STDIN>) {
@@ -93,7 +96,7 @@ TEXT=$(printf '%s' "$TEXT" | /usr/bin/perl -CSD -pe '
 ')
 TEXT=$(printf '%s' "$TEXT" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 
-if [ "$MAX_CHARS" -gt 0 ] && [ "${#TEXT}" -gt "$MAX_CHARS" ]; then TEXT="$LONG_MSG"; fi
+if [ "$FULL_READ" != "1" ] && [ "$MAX_CHARS" -gt 0 ] && [ "${#TEXT}" -gt "$MAX_CHARS" ]; then TEXT="$LONG_MSG"; fi
 [ -n "$TEXT" ] || exit 0
 
 if [ -n "$VOICE" ]; then say -v "$VOICE" -r "$RATE" "$TEXT"; else say -r "$RATE" "$TEXT"; fi

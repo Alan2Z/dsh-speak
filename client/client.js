@@ -41,6 +41,8 @@ window.__ModuleLoader__.load({
       masterSwitchHint: '临时开启或关闭所有播报。',
       automaticSpeech: '自动朗读',
       automaticSpeechHint: '朗读最终回复。手动重播始终可用。',
+      replayFullRead: '重播完整朗读',
+      replayFullReadHint: '手动重播时跳过超长文本的标题截断，完整朗读。',
       queueAllMessages: '入队所有消息',
       queueAllMessagesHint: '每一条 assistant 消息到达即入队朗读（中间消息也读，FIFO），而不只读最终回复。',
       cleanMarkdown: '清理 Markdown',
@@ -96,6 +98,8 @@ window.__ModuleLoader__.load({
       masterSwitchHint: 'Temporarily enable or disable all announcements.',
       automaticSpeech: 'Automatic Speech',
       automaticSpeechHint: 'Speaks final assistant responses. Manual replay always remains available.',
+      replayFullRead: 'Full Read on Replay',
+      replayFullReadHint: 'When replaying, read the full text instead of the heading fallback.',
       queueAllMessages: 'Queue All Messages',
       queueAllMessagesHint: 'Also speaks intermediate assistant messages in a FIFO queue, not only the final reply.',
       cleanMarkdown: 'Clean Markdown Formatting',
@@ -202,10 +206,28 @@ window.__ModuleLoader__.load({
       function SpeakAction(props) {
         const messageId = props.messageId == null ? null : String(props.messageId)
         const turnData = props.useSession(snapshot => {
-          const addressed = snapshot.nodes.find(node => node.kind === 'assistant' && String(node.messageId) === messageId)
-          if (!addressed || !Number.isFinite(addressed.turn)) return { turn: null, text: '' }
-          const nodes = snapshot.nodes.filter(node => node.kind === 'assistant' && node.turn === addressed.turn).slice().sort((a, b) => a.seq - b.seq)
-          return { turn: addressed.turn, text: nodes.map(visibleText).filter(Boolean).join('\n\n') }
+          // DSH 会话投影：snapshot.chat.nodes 是按 key 索引的 Map，value 为
+          // { key, kind, data, location }。最终 assistant 消息内容在节点的
+          // data.finalNode（assistant 节点）或 data.closing.finalNode
+          // （turn-tail 节点）里，含 messageId / turn / seq / blocks。
+          const nodes = snapshot && snapshot.chat && snapshot.chat.nodes
+          if (!nodes || typeof nodes.values !== 'function') return { turn: null, text: '' }
+          const all = [...nodes.values()]
+          const finalOf = node => {
+            const d = node && node.data
+            if (!d) return null
+            if (d.finalNode) return d.finalNode
+            if (d.closing && d.closing.finalNode) return d.closing.finalNode
+            return d.kind === 'assistant' ? d : null
+          }
+          const entries = all.map(node => ({ final: finalOf(node) }))
+          const addressed = entries.find(entry => entry.final && String(entry.final.messageId) === messageId)
+          if (!addressed || !Number.isFinite(addressed.final.turn)) return { turn: null, text: '' }
+          const turn = addressed.final.turn
+          // 只重播点击的那条消息（assistant-actions 只渲染在回合尾部 = 最终回复），
+          // 不合并整个回合的所有中间消息
+          const text = visibleText(addressed.final)
+          return { turn, text }
         })
         const active = useSpeechState()
         const speaking = active.speaking && String(active.sessionId) === String(props.sessionId) && active.turn === turnData.turn
@@ -251,6 +273,7 @@ window.__ModuleLoader__.load({
         return e('section', { 'aria-label': t('settingsAria') }, e('h3', null, t('settingsTitle')), e('p', null, t('settingsIntro')),
           e(Toggle, { label: t('masterSwitch'), value: value.enabled !== false, disabled, onChange: next => set('enabled', next), hint: t('masterSwitchHint') }),
           e(Toggle, { label: t('automaticSpeech'), value: value.automaticSpeech !== false, disabled, onChange: next => set('automaticSpeech', next), hint: t('automaticSpeechHint') }),
+          e(Toggle, { label: t('replayFullRead'), value: value.replayFullRead === true, disabled, onChange: next => set('replayFullRead', next), hint: t('replayFullReadHint') }),
           e(Toggle, { label: t('queueAllMessages'), value: value.queueAllMessages === true, disabled: disabled || value.automaticSpeech === false, onChange: next => set('queueAllMessages', next), hint: t('queueAllMessagesHint') }),
           e(Toggle, { label: t('cleanMarkdown'), value: clean, disabled, onChange: next => set('cleanMarkdownFormatting', next), hint: t('cleanMarkdownHint') }), e(MarkdownCleaning, { value, clean, disabled, set }),
           e(SettingInput, { label: t('maxChars'), value: value.maxChars == null ? 0 : value.maxChars, numeric: true, disabled, onChange: next => { if (/^\d+$/.test(next)) set('maxChars', Number(next)) }, hint: t('maxCharsHint') }),

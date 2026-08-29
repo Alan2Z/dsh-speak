@@ -236,6 +236,7 @@ config:
   enabled: true                # master switch
   automaticSpeech: true        # auto-speak final replies
   queueAllMessages: false      # true = enqueue every assistant message
+  replayFullRead: false        # true = manual replay skips the long-text truncation
   cleanMarkdownFormatting: true
   readInlineCode: true
   codeBlocks: smart            # all | smart | replace

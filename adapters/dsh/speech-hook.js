@@ -86,6 +86,7 @@ const SCHEMA_DEFAULTS = {
   codeBlockReplacementText: 'You can see the code in our history.',
   queueAllMessages: false,
   throttleMs: 1500,
+  replayFullRead: false,
   engine: '',
   announceApprovals: true,
   announceQuestions: true,
@@ -120,6 +121,7 @@ function resolveConfig(value) {
     codeBlockReplacementText: String(value.codeBlockReplacementText || 'You can see the code in our history.'),
     queueAllMessages: value.queueAllMessages === true,
     throttleMs: Number(value.throttleMs != null ? value.throttleMs : 1500) || 1500,
+    replayFullRead: value.replayFullRead === true,
     engine: resolveEngine(value.engine || ''),
     announceApprovals: value.announceApprovals !== false,
     announceQuestions: value.announceQuestions !== false,
@@ -157,6 +159,7 @@ function buildSettingsNamespace(ctx, patch) {
       codeBlockReplacementText: z.string().default('You can see the code in our history.'),
       queueAllMessages: z.boolean().default(false),
       throttleMs: z.natural().default(1500),
+      replayFullRead: z.boolean().default(false),
       engine: z.string().default(''),
       announceApprovals: z.boolean().default(true),
       announceQuestions: z.boolean().default(true),
@@ -253,12 +256,15 @@ module.exports = {
       try { fs.writeFileSync(tmp, item.text, 'utf8') } catch (e) { log('write temp failed:', e.message); return false }
       log('speech start', item.source, item.sessionId || '-', item.turn == null ? '-' : item.turn, item.messageId || '-', item.text.slice(0, 80))
       let child
+      // 手动重播完整朗读：replayFullRead 打开时，重播跳过 heading 截断完整朗读
+      const fullRead = item.manual === true && cfg.replayFullRead === true
       if (process.platform === 'darwin') {
         const args = ['-f', tmp, '-m', String(cfg.maxChars), '-M', cfg.longTextMode, '-l', cfg.longTextMessage, '-C', cfg.cleanMarkdownFormatting ? '1' : '0', '-I', cfg.readInlineCode ? '1' : '0', '-B', cfg.codeBlocks, '-K', String(cfg.codeBlockMaxChars), '-R', cfg.codeBlockReplacementText]
         if (cfg.rate > 0) args.push('-r', String(cfg.rate))
+        if (fullRead) args.push('-F')
         child = spawn('/bin/bash', [cfg.engine].concat(args), { detached: true, stdio: 'ignore' })
       } else {
-        child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', cfg.engine, '-File', tmp, '-Volume', String(cfg.volume), '-Rate', String(cfg.rate > 0 ? cfg.rate : 1), '-MaxChars', String(cfg.maxChars), '-LongTextMode', cfg.longTextMode, '-LongTextMessage', cfg.longTextMessage, '-CleanMarkdownFormatting', cfg.cleanMarkdownFormatting ? '1' : '0', '-ReadInlineCode', cfg.readInlineCode ? '1' : '0', '-CodeBlocks', cfg.codeBlocks, '-CodeBlockMaxChars', String(cfg.codeBlockMaxChars), '-CodeBlockReplacementText', cfg.codeBlockReplacementText], { windowsHide: true, stdio: 'ignore' })
+        child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', cfg.engine, '-File', tmp, '-Volume', String(cfg.volume), '-Rate', String(cfg.rate > 0 ? cfg.rate : 1), '-MaxChars', String(cfg.maxChars), '-LongTextMode', cfg.longTextMode, '-LongTextMessage', cfg.longTextMessage, '-CleanMarkdownFormatting', cfg.cleanMarkdownFormatting ? '1' : '0', '-ReadInlineCode', cfg.readInlineCode ? '1' : '0', '-CodeBlocks', cfg.codeBlocks, '-CodeBlockMaxChars', String(cfg.codeBlockMaxChars), '-CodeBlockReplacementText', cfg.codeBlockReplacementText, '-FullRead', fullRead ? '1' : '0'], { windowsHide: true, stdio: 'ignore' })
       }
       const token = ++speechToken
       activeSpeech = { process: child, tmp, token, item, gapMs: item.gapMs || 0 }
@@ -375,7 +381,7 @@ module.exports = {
               return
             }
             if (body.action !== 'play' || typeof body.text !== 'string' || !body.text.trim()) { reply(400, { error: 'invalid control request' }); return }
-            replaceWith({ source: 'manual', sessionId: body.sessionId == null ? null : String(body.sessionId), turn: Number.isFinite(body.turn) ? body.turn : null, messageId: body.messageId == null ? null : String(body.messageId), text: body.text })
+            replaceWith({ source: 'manual', manual: true, sessionId: body.sessionId == null ? null : String(body.sessionId), turn: Number.isFinite(body.turn) ? body.turn : null, messageId: body.messageId == null ? null : String(body.messageId), text: body.text })
             reply(200, state())
           } catch (e) { reply(e.message === 'request too large' ? 413 : 400, { error: e.message }) }
         },

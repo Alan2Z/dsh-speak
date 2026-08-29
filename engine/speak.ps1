@@ -39,11 +39,16 @@ param(
     [ValidateSet('all', 'smart', 'replace')]
     [string]$CodeBlocks = 'smart',
     [int]$CodeBlockMaxChars = 300,
-    [string]$CodeBlockReplacementText = 'You can see the code in our history.'
+    [string]$CodeBlockReplacementText = 'You can see the code in our history.',
+    # 手动重播完整朗读：跳过超长文本的 heading/message 截断，分段完整朗读
+    [string]$FullRead = '0'
 )
 
 $cleanMarkdown = $CleanMarkdownFormatting -in @('1', 'true', 'yes', 'on')
 $readInlineCode = $ReadInlineCode -in @('1', 'true', 'yes', 'on')
+# 注意：PowerShell 变量大小写不敏感，内部变量名不能与参数名仅差大小写
+# （曾用 $fullRead 导致自赋值污染参数 $FullRead，使 -not 判断失效）
+$fullReadMode = $FullRead -in @('1', 'true', 'yes', 'on')
 
 # ---------- input: pick text source ----------
 if ($File) {
@@ -57,8 +62,9 @@ if (-not $text -or -not $text.Trim()) { exit 0 }
 # ---------- length guard: adapter per-Speak ceiling ----------
 # 'message': fixed prompt. 'heading': speak the largest markdown heading instead
 # (fewest '#' wins, tie -> first; no heading -> first non-empty line; the
-# cleaned candidate is still subject to the ceiling below).
-if ($text.Length -gt $MaxChars -and $LongTextMode -eq 'heading') {
+# cleaned candidate is still subject to the ceiling below). FullRead 手动重播
+# 跳过该守卫（见文件底部"完整朗读"分支）。
+if (-not $fullReadMode -and $text.Length -gt $MaxChars -and $LongTextMode -eq 'heading') {
     $candidate = ''
     $bestLevel = 7
     $firstNonEmpty = ''
@@ -98,7 +104,7 @@ $text = $text -replace '\s+', ' '
 $text = $text.Trim()
 
 # ---------- final ceiling (also catches over-long heading candidates) ----------
-if ($text.Length -gt $MaxChars) { $text = $LongTextMessage }
+if (-not $fullReadMode -and $text.Length -gt $MaxChars) { $text = $LongTextMessage }
 
 # ---------- speak ----------
 Add-Type -AssemblyName System.Speech
@@ -115,5 +121,30 @@ if (-not $voice) { $voice = $voices | Where-Object { $_.VoiceInfo.Culture.Name -
 if ($voice) { $synth.SelectVoice($voice.VoiceInfo.Name) }
 
 $synth.Rate = $Rate
-$synth.Speak($text)
+
+# ---------- 完整朗读（FullRead，手动重播） ----------
+# Windows SAPI 单次 Speak 有约 375-470 字上限，超长会静默失败；因此按句末
+# 标点切成不超过 450 字的段，逐段朗读（自动播报不经过这里，走上面的守卫）。
+$SPEAK_CHUNK = 400
+if ($fullReadMode -and $text.Length -gt $SPEAK_CHUNK) {
+    $parts = [regex]::Split($text, '(?<=[。！？；.!?;])')
+    $chunk = ''
+    foreach ($part in $parts) {
+        if ($part.Length -eq 0) { continue }
+        if ($chunk.Length + $part.Length -gt $SPEAK_CHUNK) {
+            if ($chunk) { $synth.Speak($chunk); $chunk = '' }
+            # 单段仍超长：硬切
+            while ($part.Length -gt $SPEAK_CHUNK) {
+                $synth.Speak($part.Substring(0, $SPEAK_CHUNK))
+                $part = $part.Substring($SPEAK_CHUNK)
+            }
+            $chunk = $part
+        } else {
+            $chunk += $part
+        }
+    }
+    if ($chunk) { $synth.Speak($chunk) }
+} else {
+    $synth.Speak($text)
+}
 exit 0
