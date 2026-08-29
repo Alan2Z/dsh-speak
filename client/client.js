@@ -66,7 +66,8 @@ window.__ModuleLoader__.load({
       volume: '音量',
       volumeHint: '仅 Windows（0-100）；macOS 音量跟随系统。',
       rate: '语速',
-      rateHint: '0 = 引擎默认（Windows SAPI 刻度 / macOS words-per-minute）。',
+      rateHintWin: 'Windows SAPI 语速（-10 到 10，0 = 正常；推荐 0，稍快 1-3）。',
+      rateHintMac: 'words-per-minute（wpm），数值越大语速越快：默认 175，稍快 200。',
       engine: '引擎路径',
       engineHint: '自定义引擎脚本路径；留空自动解析（包内引擎 → ~/.dsh/hooks）。',
       longTextBehavior: '超长文本行为',
@@ -133,7 +134,8 @@ window.__ModuleLoader__.load({
       volume: 'Volume',
       volumeHint: 'Windows only (0-100); macOS volume follows the system.',
       rate: 'Speech Rate',
-      rateHint: '0 = engine default (Windows SAPI scale / macOS words-per-minute).',
+      rateHintWin: 'Windows SAPI rate scale (-10 to 10, 0 = normal; try 1-3 for faster).',
+      rateHintMac: 'words-per-minute (wpm) — higher = faster: default 175, 200 is a bit faster.',
       engine: 'Engine Path',
       engineHint: 'Custom engine script path; empty = auto-resolve (package engine → ~/.dsh/hooks).',
       longTextBehavior: 'Long Text Behavior',
@@ -290,6 +292,7 @@ window.__ModuleLoader__.load({
         const [eventsOpen, setEventsOpen] = React.useState(false)
         const snapshot = useSettings(); if (snapshot.status !== 'ready' || !snapshot.value) return null
         const value = snapshot.value; const disabled = !snapshot.writable; const clean = value.cleanMarkdownFormatting !== false; const set = (field, next) => { void settings.set(field, next).catch(console.error) }
+        const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent || navigator.platform || '')
         return e('section', { 'aria-label': t('settingsAria') }, e('h3', null, t('settingsTitle')), e('p', null, t('settingsIntro')),
           e(Toggle, { label: t('masterSwitch'), value: value.enabled !== false, disabled, onChange: next => set('enabled', next), hint: t('masterSwitchHint') }),
           e(Toggle, { label: t('automaticSpeech'), value: value.automaticSpeech !== false, disabled, onChange: next => set('automaticSpeech', next), hint: t('automaticSpeechHint') }),
@@ -299,7 +302,7 @@ window.__ModuleLoader__.load({
           e(Toggle, { label: t('cleanMarkdown'), value: clean, disabled, onChange: next => set('cleanMarkdownFormatting', next), hint: t('cleanMarkdownHint') }), e(MarkdownCleaning, { value, clean, disabled, set }),
           e(SettingInput, { label: t('maxChars'), value: value.maxChars == null ? 0 : value.maxChars, numeric: true, disabled, onChange: next => { if (/^\d+$/.test(next)) set('maxChars', Number(next)) }, hint: t('maxCharsHint') }),
           e(SettingInput, { label: t('volume'), value: value.volume == null ? 50 : value.volume, numeric: true, disabled, onChange: next => { if (/^\d+$/.test(next)) set('volume', Number(next)) }, hint: t('volumeHint') }),
-          e(SettingInput, { label: t('rate'), value: value.rate == null ? 0 : value.rate, numeric: true, disabled, onChange: next => { if (/^-?\d*\.?\d*$/.test(next)) set('rate', Number(next)) }, hint: t('rateHint') }),
+          e(SettingInput, { label: t('rate'), value: value.rate == null ? 0 : value.rate, numeric: true, disabled, onChange: next => { if (/^-?\d*\.?\d*$/.test(next)) set('rate', Number(next)) }, hint: isMac ? t('rateHintMac') : t('rateHintWin') }),
           e(SettingInput, { label: t('engine'), value: value.engine || '', disabled, onChange: next => set('engine', next), hint: t('engineHint') }),
           e(Options, { label: t('longTextBehavior'), value: value.longTextMode || 'message', disabled, onChange: next => set('longTextMode', next), hint: t('longTextBehaviorHint'), options: [{ value: 'message', label: t('longTextMessageOption') }, { value: 'heading', label: t('longTextHeadingOption') }] }),
           e(SettingInput, { label: t('fixedPrompt'), value: value.longTextMessage || '本次播报内容较长，请自行阅读。', disabled: disabled || value.longTextMode !== 'message', onChange: next => set('longTextMessage', next), hint: t('fixedPromptHint') }),

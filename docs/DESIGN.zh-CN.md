@@ -232,7 +232,7 @@ config:
   longTextMessage: '本次播报内容较长，请自行阅读。'
   maxChars: 300                # macOS 默认 0 = 不限
   volume: 50                   # 仅 Windows
-  rate: 0                      # 0 = 引擎默认
+  rate: 0                      # 语速：Win SAPI 刻度 -10~10（0=正常）/ mac wpm（175）
   # —— 可选事件播报（默认全关）——
   announceTurnEnd: false     # turn/end
   announceCommandDone: false # command/done

@@ -253,7 +253,7 @@ config:
   longTextMessage: '本次播报内容较长，请自行阅读。'
   maxChars: 300                # macOS default 0 = unlimited
   volume: 50                   # Windows only
-  rate: 0                      # 0 = engine default
+  rate: 0                      # rate: Win SAPI scale -10..10 (0=normal) / mac wpm (175)
   # —— optional event announcements (off by default) ——
   announceTurnEnd: false     # turn/end
   announceCommandDone: false # command/done

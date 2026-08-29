@@ -249,6 +249,9 @@ async function main() {
   assert.ok(ps12, 'manual play spawned powershell')
   const idx12 = ps12.args.indexOf('-FullRead')
   assert.ok(idx12 >= 0 && ps12.args[idx12 + 1] === '1', `replayFullRead on → -FullRead 1: ${JSON.stringify(ps12.args.slice(idx12, idx12 + 2))}`)
+  // Windows 语速透传 cfg.rate（默认 0 = SAPI 正常），不再替换成 1
+  const rateIdx12 = ps12.args.indexOf('-Rate')
+  assert.ok(rateIdx12 >= 0 && ps12.args[rateIdx12 + 1] === '0', `default rate must pass 0 (SAPI normal), got ${JSON.stringify(ps12.args.slice(rateIdx12, rateIdx12 + 2))}`)
   await t12.finishAll()
   await t12.flush(20)
 

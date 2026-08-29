@@ -295,7 +295,7 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
 | `longTextMessage` | `本次播报内容较长，请自行阅读。` | `message` 模式下超长文本改念的固定提示语（UI 可编辑） |
 | `maxChars` | 平台相关 | 引擎单次朗读上限。**macOS 默认 0（`say` 无上限）；Windows 默认 300**（SAPI 超过约 375-470 字会静默失败） |
 | `volume` | `50` | 仅 Windows（0-100）；macOS 音量跟随系统 |
-| `rate` | `0` | `0` = 引擎默认（Windows SAPI 刻度如 1；macOS words-per-minute 如 175） |
+| `rate` | `0` | 语速：Windows SAPI 刻度（-10 到 10，0 = 正常，推荐 0 / 稍快 1-3）；macOS words-per-minute（默认 175，稍快 200） |
 | `announceTurnEnd` | `false` | 回合结束时播报"第 N 轮对话完成/中断/异常结束"（`turn/end`） |
 | `announceCommandDone` | `false` | 命令执行完成/失败时播报（`command/done`） |
 | `announceGoalChange` | `false` | 目标创建/更新/完成/暂停/恢复时播报（`goal/change`，含目标标题前 40 字） |

@@ -315,7 +315,7 @@ document):
 | `longTextMessage` | `本次播报内容较长，请自行阅读。` | the fixed prompt spoken for over-long text in `message` mode (editable in the UI) |
 | `maxChars` | platform | per-utterance ceiling. **macOS default 0 (`say` has no ceiling); Windows default 300** (SAPI fails silently beyond ~375-470) |
 | `volume` | `50` | Windows only (0-100); macOS volume follows the system |
-| `rate` | `0` | `0` = engine default (Windows SAPI scale, e.g. 1; macOS words-per-minute, e.g. 175) |
+| `rate` | `0` | speech rate: Windows SAPI scale (-10 to 10, 0 = normal; try 1-3 for faster); macOS words-per-minute (default 175, 200 is a bit faster) |
 | `announceTurnEnd` | `false` | announce "第 N 轮对话完成/中断/异常结束" on turn end (`turn/end`) |
 | `announceCommandDone` | `false` | announce when a command finishes or fails (`command/done`) |
 | `announceGoalChange` | `false` | announce goal created/updated/completed/paused/resumed (`goal/change`, objective head) |
