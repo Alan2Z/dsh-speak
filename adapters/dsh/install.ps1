@@ -1,4 +1,4 @@
-# install.ps1 — one-command installer for the DSH adapter
+﻿# install.ps1 — one-command installer for the DSH adapter
 # ========================================================
 # 1. copies engine/*.ps1 to ~/.dsh/hooks/
 # 2. copies speech-hook.js to ~/.dsh/profiles/web/plugins/

@@ -1,4 +1,4 @@
-# speech-summary.ps1 — Reply summary announcement (synchronous, blocking)
+﻿# speech-summary.ps1 — Reply summary announcement (synchronous, blocking)
 # For harnesses with no "reply finished" event (e.g. DSH has no Stop hook): the
 # agent calls this at the end of its final reply.
 #

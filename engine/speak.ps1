@@ -1,4 +1,4 @@
-# speak.ps1 — Harness-agnostic speech engine (Windows SAPI5 + NaturalVoiceSAPIAdapter)
+﻿# speak.ps1 — Harness-agnostic speech engine (Windows SAPI5 + NaturalVoiceSAPIAdapter)
 # ====================================================================================
 # Reads text (inline or from a UTF-8 file), cleans it for speech synthesis, and reads
 # it aloud through Windows SAPI5, preferring natural voices registered by

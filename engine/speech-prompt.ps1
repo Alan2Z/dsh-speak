@@ -1,4 +1,4 @@
-# speech-prompt.ps1 — Short prompt announcement (synchronous, blocking)
+﻿# speech-prompt.ps1 — Short prompt announcement (synchronous, blocking)
 # Use when a harness/agent needs the user's attention (a question, an approval
 # request). Reads the text through engine/speak.ps1 and waits until it finishes,
 # so the caller knows the announcement was actually spoken.
