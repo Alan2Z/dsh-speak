@@ -56,8 +56,10 @@ fi
 # -F (full read, manual replay) skips this guard entirely.
 if [ "$FULL_READ" != "1" ] && [ "$MAX_CHARS" -gt 0 ] && [ "${#TEXT}" -gt "$MAX_CHARS" ] && [ "$LONG_MODE" = "heading" ]; then
   TEXT=$(printf '%s' "$TEXT" | /usr/bin/perl -CSD -e '
-    my $best = 7; my $cand = ""; my $first = "";
+    my $best = 7; my $cand = ""; my $first = ""; my $inCode = 0;
     while (<STDIN>) {
+      if (/^\s*```/) { $inCode = !$inCode; next; }   # 跳过代码块内的 "# 注释"
+      next if $inCode;
       if (/^[ \t]*(\#{1,6})[ \t]+(.*)$/) { my $n = length($1); if ($n < $best) { $best = $n; $cand = $2; } }
       elsif ($first eq "" && /\S/) { $first = $_; }
     }

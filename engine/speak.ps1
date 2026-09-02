@@ -1,4 +1,4 @@
-﻿# speak.ps1 — Harness-agnostic speech engine (Windows SAPI5 + NaturalVoiceSAPIAdapter)
+# speak.ps1 — Harness-agnostic speech engine (Windows SAPI5 + NaturalVoiceSAPIAdapter)
 # ====================================================================================
 # Reads text (inline or from a UTF-8 file), cleans it for speech synthesis, and reads
 # it aloud through Windows SAPI5, preferring natural voices registered by
@@ -68,7 +68,12 @@ if (-not $fullReadMode -and $text.Length -gt $MaxChars -and $LongTextMode -eq 'h
     $candidate = ''
     $bestLevel = 7
     $firstNonEmpty = ''
+    # 代码块 fence 内的行跳过：其中的 "# 注释" 不是 markdown 标题，
+    # 否则长回复里的代码注释会被误当成标题只念注释
+    $inCodeBlock = $false
     foreach ($line in ($text -split "`n")) {
+        if ($line -match '^\s*```') { $inCodeBlock = -not $inCodeBlock; continue }
+        if ($inCodeBlock) { continue }
         if ($line -match '^\s*#{1,6}\s+') {
             $level = ([regex]::Match($line, '^(\s*)(#+)')).Groups[2].Value.Length
             if ($level -lt $bestLevel) {
