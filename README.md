@@ -71,9 +71,14 @@ Windows:
 
 - Windows 10 or 11, PowerShell (any recent version).
 - Natural voices:
-  - **Windows 11**: natural voice packs are built into the system — no extra
-    installation. Enable/switch them in *Settings → Accessibility → Narrator* or
-    *Settings → Time & Language → Speech*.
+  - **Windows 11 (21H2–23H2)**: natural voice packs are built into the system —
+    no extra installation. Enable/switch them in *Settings → Accessibility →
+    Narrator* or *Settings → Time & Language → Speech*.
+  - **Windows 11 24H2/25H2**: natural voices moved to MSIX app packages, which
+    `System.Speech` may not enumerate (falls back to a robotic stock voice). As
+    on Windows 10, install
+    [NaturalVoiceSAPIAdapter](https://github.com/gexgd0419/NaturalVoiceSAPIAdapter)
+    to bridge them.
   - **Windows 10**: install
     [NaturalVoiceSAPIAdapter](https://github.com/gexgd0419/NaturalVoiceSAPIAdapter)
     and use its VoiceDownloader to download the natural voice pack(s) you want

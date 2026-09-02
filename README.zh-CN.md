@@ -64,8 +64,12 @@ harness 事件（DSH 会话事件 / Claude Code Stop hook / 任意方式）
 
 - Windows 10 或 11，任意较新的 PowerShell。
 - 自然语音：
-  - **Windows 11**：系统已内置自然语音包，无需额外安装——在
+  - **Windows 11（21H2–23H2）**：系统已内置自然语音包，无需额外安装——在
     *设置 → 辅助功能 → 讲述人* 或 *设置 → 时间和语言 → 语音* 中启用/切换即可。
+  - **Windows 11 24H2/25H2**：自然语音已改为 MSIX 应用包，`System.Speech` 可能
+    枚举不到（`SpeechSynthesizer` 找不到自然语音、回退到机械音）——与 Windows 10
+    相同，需安装 [NaturalVoiceSAPIAdapter](https://github.com/gexgd0419/NaturalVoiceSAPIAdapter)
+    桥接。
   - **Windows 10**：需要安装
     [NaturalVoiceSAPIAdapter](https://github.com/gexgd0419/NaturalVoiceSAPIAdapter)，
     并用它的 VoiceDownloader 手动下载你需要的中文或其他语言的自然语音包。
