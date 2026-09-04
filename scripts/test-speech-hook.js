@@ -265,6 +265,34 @@ async function main() {
   await t13.finishAll()
   await t13.flush(20)
 
+  // ---- 14. approval/asked: generic action-label prefix stripped, Chinese kept ----
+  async function approvalCase(announce, reason) {
+    const t = applyWith({ announceApprovals: announce, throttleMs: 10 })
+    t.fire('approval/asked', { reason })
+    await t.flush(20)
+    await t.finishAll()
+    await t.flush(20)
+    return announced
+  }
+  // 英文动作短语 + 冒号前缀 → 只念冒号后的内容（memory 工具的真实样例）
+  let out = await approvalCase(true, 'Store decision fact in workspace memory (dsh-speak): dsh-speak 暂不适配 DSH 0.1.2/0.1.3')
+  assert.ok(out.some(t => t === 'dsh-speak 暂不适配 DSH 0.1.2/0.1.3'),
+    `english action prefix stripped: ${JSON.stringify(out)}`)
+  // 旧固定前缀（escalate sandbox）回归
+  out = await approvalCase(true, 'escalate sandbox to danger-full-access: 需要写入 ~/.dsh 目录')
+  assert.ok(out.some(t => t === '需要写入 ~/.dsh 目录'),
+    `escalate sandbox prefix stripped: ${JSON.stringify(out)}`)
+  // 中文开头 / 无冒号 → 原样保留
+  out = await approvalCase(true, '删除 mneme 插件残留的记忆数据目录（工作区外）')
+  assert.ok(out.some(t => t === '删除 mneme 插件残留的记忆数据目录（工作区外）'),
+    `chinese reason kept verbatim: ${JSON.stringify(out)}`)
+  out = await approvalCase(true, '请确认是否允许网络访问')
+  assert.ok(out.some(t => t === '请确认是否允许网络访问'),
+    `no-colon reason kept: ${JSON.stringify(out)}`)
+  // announceApprovals off → 不播
+  out = await approvalCase(false, 'escalate sandbox to danger-full-access: 不应播报')
+  assert.ok(!out.some(t => t === '不应播报'), `announceApprovals off silent: ${JSON.stringify(out)}`)
+
   console.log('ALL PASS ✓')
   process.exit(0)
 }

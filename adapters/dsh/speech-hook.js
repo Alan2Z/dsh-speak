@@ -472,7 +472,13 @@ module.exports = {
         if (type === 'approval/asked' && cfg.announceApprovals) {
           cancelPending()
           let reason = String((event.data && event.data.reason) || '')
-          if (cfg.stripApprovalPrefix) reason = reason.replace(/^escalate sandbox to danger-full-access\s*:\s*/i, '').trim()
+          if (cfg.stripApprovalPrefix) {
+            // 通用剥离行首"动作标签: "前缀（英文动作短语 + 冒号，如
+            // "Store decision fact in workspace memory (dsh-speak): <内容>"、
+            // "escalate sandbox to danger-full-access: <原因>"），只念冒号后的
+            // 具体内容；中文开头或无冒号的 reason 原样保留（如"删除 xxx"）。
+            reason = reason.replace(/^[A-Za-z][^:：\n]*?[:：]\s*/, '').trim()
+          }
           enqueue(hostItem('approval', session, event, reason || '需要你的审批，请查看界面。', null))
           return
         }
