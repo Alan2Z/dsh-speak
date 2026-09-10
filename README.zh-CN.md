@@ -91,6 +91,9 @@ harness 事件（DSH 会话事件 / Claude Code Stop hook / 任意方式）
     按 patch `config` 工作。
   - Session snapshot 不再携带会话视图（Conversation target）数据——🔊 按钮改为
     通过 Chat 目标的 hook `useChat` 取被点击消息的文本。
+- 宿主要求声明在 dsh-market 实际读取的位置：`package.json` 的 `engines.dsh`
+  （`>=0.1.5-rc.1`）。市场卡片与「适配当前 DSH」筛选读的正是这个字段，因此只有在
+  某个宿主版本上实测通过后，这个下限才会移动。
 
 ## 安装与快速开始
 

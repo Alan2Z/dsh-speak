@@ -351,6 +351,28 @@ dependencies in the profile). This repository is prepared for that path:
 Because the engine rides inside the npm package, `dsh plugin --profile web add
 dsh-speak` alone is sufficient — no separate copying step.
 
+### Host requirement (`engines.dsh`)
+
+`package.json` declares `engines.dsh: >=0.1.5-rc.1`. That one field is what
+dsh-market reads to label the catalog card (`DSH >=0.1.5-rc.1`) and to decide
+whether the plugin survives its "compatible with current DSH" filter:
+
+- the facts come from the package's npm `latest` manifest
+  (`{registry}/<pkg>/latest`, cached ~24 h) — the catalog YAML in
+  `awesome-dsh-plugin` has no host field, so a PR there cannot declare this;
+- an `engines.dsh` value is an `engine` declaration. Lockstep `@deepseek-ai/dsh*`
+  **peers** count too, but non-lockstep host packages are skipped on purpose
+  (`@deepseek-ai/schemastery`, `@deepseek-ai/cordis` — the schemastery peer above
+  therefore declares nothing about the DSH version);
+- all declarations are conjunctive and compared prerelease-aware, so
+  `>=0.1.5-rc.1` matches a `0.1.5-rc.1` host; a missing declaration shows up as
+  "host requirement undeclared", never as "incompatible";
+- npm itself only enforces `engines.node` / `engines.npm`, so this key never
+  blocks an install — it is marketplace metadata;
+- move the floor only after a release has been verified against the new host, and
+  update both READMEs with it: `scripts/test-manifest.js` asserts the same string
+  appears in `package.json`, `README.md` and `README.zh-CN.md`.
+
 ### Publish steps (maintainer)
 
 ```powershell

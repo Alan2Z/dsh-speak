@@ -102,6 +102,10 @@ DSH web app:
     now just leaves the composed patch `config` in force.
   - the Session snapshot stopped carrying Conversation target data — the 🔊 button
     resolves the clicked message through the Chat target hook `useChat`.
+- The host floor lives where dsh-market reads it: `engines.dsh` in `package.json`
+  (`>=0.1.5-rc.1`). The catalog card and its "compatible with current DSH" filter
+  read exactly that field, so the floor moves only after a release has been
+  verified against the new host.
 
 ## Install & quick start
 

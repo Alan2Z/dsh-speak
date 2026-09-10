@@ -1,6 +1,6 @@
 {
   "name": "dsh-speak",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "description": "Make your AI harness speak — voice announcements for DSH and other AI coding harnesses (Windows SAPI5 + macOS system voices)",
   "main": "adapters/dsh/speech-hook.js",
   "exports": {
@@ -52,14 +52,15 @@
     "say"
   ],
   "scripts": {
-    "test": "node scripts/test-engine-static.js && node scripts/test-engine-longtext.js && node scripts/test-client-bundle.js && node scripts/test-speech-hook.js && node scripts/test-settings-integration.js",
-    "prepublishOnly": "node scripts/test-engine-static.js && node --check adapters/dsh/speech-hook.js && node --check client/client.js"
+    "test": "node scripts/test-manifest.js && node scripts/test-engine-static.js && node scripts/test-engine-longtext.js && node scripts/test-client-bundle.js && node scripts/test-speech-hook.js && node scripts/test-settings-integration.js",
+    "prepublishOnly": "node scripts/test-manifest.js && node scripts/test-engine-static.js && node --check adapters/dsh/speech-hook.js && node --check client/client.js"
   },
   "dependencies": {
     "ws": "^8.18.0"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=18",
+    "dsh": ">=0.1.5-rc.1"
   },
   "repository": {
     "type": "git",

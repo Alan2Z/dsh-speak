@@ -321,6 +321,24 @@ DSH 的插件机制基于 Cordis，官方安装树外插件的路径是
 因为引擎随 npm 包分发，用户只需 `dsh plugin --profile web add dsh-speak`
 一条命令，无需额外拷贝。
 
+### 宿主要求（`engines.dsh`）
+
+`package.json` 声明了 `engines.dsh: >=0.1.5-rc.1`。dsh-market 只读这一个字段来标注
+目录卡片（`DSH >=0.1.5-rc.1`）并决定插件能否通过「适配当前 DSH」筛选：
+
+- 数据源是该包 npm `latest` manifest（`{registry}/<pkg>/latest`，缓存约 24 小时）
+  ——`awesome-dsh-plugin` 里那份目录 YAML 没有宿主字段，往那里提 PR 声明不了；
+- `engines.dsh` 属于 `engine` 声明；同版本线的 `@deepseek-ai/dsh*` **peer** 也算，
+  但非同一版本线的宿主包会被有意跳过（`@deepseek-ai/schemastery`、
+  `@deepseek-ai/cordis`）——所以上面那条 schemastery peer 不构成任何 DSH 版本声明；
+- 所有声明取交集，比较时带 prerelease 语义，`>=0.1.5-rc.1` 能匹配 `0.1.5-rc.1`
+  宿主；完全没声明只会显示「未声明宿主要求」，不会显示成不兼容；
+- npm 本身只强制 `engines.node` / `engines.npm`，这个键不会挡住安装，它只是市场
+  元数据；
+- 只有在某个宿主版本上实测通过后才移动下限，并同步两份 README：
+  `scripts/test-manifest.js` 断言同一个字符串同时出现在 `package.json`、
+  `README.md`、`README.zh-CN.md`。
+
 ### 发布步骤（维护者）
 
 ```powershell
