@@ -89,8 +89,25 @@ async function finishAll(rounds = 10) {
   spawned.length = 0
 }
 
-// --- load plugin (settings registration happens on a timer tick) ---
-const hook = require(path.join(__dirname, '..', 'adapters', 'dsh', 'speech-hook.js'))
+// --- load plugin (registration goes through the injected settings service) ---
+const hookPath = path.join(__dirname, '..', 'adapters', 'dsh', 'speech-hook.js')
+// Regression guard for the DSH 0.1.2 break: @deepseek-ai/dsh-settings deleted
+// `installSettingsSection` and `settingsNamespace`. A missing NAMED export is a
+// module-evaluation error, and even a lazy call throws — the old code called one
+// of them inside a timer callback, which crashed the host with
+// `settingsNamespace is not a function`. The plugin must only use the service.
+const hookSource = fs.readFileSync(hookPath, 'utf8')
+// Prose ABOUT the removed helpers is fine (the plugin documents the break); only
+// real usage is a defect, so the guards run over code with comments stripped.
+const hookCode = hookSource.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1')
+assert.ok(!/require\(\s*['"]@deepseek-ai\/dsh-settings['"]\s*\)/.test(hookCode),
+  'plugin must not require @deepseek-ai/dsh-settings — it deleted the helpers the plugin used to call')
+assert.ok(!/\.installSettingsSection\s*\(/.test(hookCode) && !/\.settingsNamespace\s*\(/.test(hookCode),
+  'plugin must not call the helpers removed in DSH 0.1.2')
+assert.ok(/\.settings\.register\(/.test(hookCode),
+  'plugin must register its namespace through the injected settings service')
+
+const hook = require(hookPath)
 hook.apply(ctx, {
   announceTurnEnd: true, // patch sets it on; UI later turns it off to prove onChange
 })

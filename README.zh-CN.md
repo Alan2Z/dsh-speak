@@ -80,6 +80,18 @@ harness 事件（DSH 会话事件 / Claude Code Stop hook / 任意方式）
 - macOS（Apple Silicon / Intel 均可），系统自带 `say` 命令，**无需安装任何软件**。
 - 中文音色与 Siri 音色的选择入口/坑见 [macOS](#macos) 一节。
 
+### DSH 版本
+
+- 已在 **DSH 0.1.5-rc.1** 上验证。0.1.1 之后有两处 host/客户端 API 变更，本插件
+  1.8.0 均已适配：
+  - `@deepseek-ai/dsh-settings` 删除了 `installSettingsSection` /
+    `settingsNamespace` 两个辅助导出——插件改为通过 `settings` **服务**注册
+    namespace（旧版本上原实现会让宿主启动直接崩掉：
+    `settingsNamespace is not a function`）。没有 settings provider 时，插件照旧
+    按 patch `config` 工作。
+  - Session snapshot 不再携带会话视图（Conversation target）数据——🔊 按钮改为
+    通过 Chat 目标的 hook `useChat` 取被点击消息的文本。
+
 ## 安装与快速开始
 
 ### DSH — 方式 A：npm 插件（推荐）
@@ -303,7 +315,7 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
 | `announceTurnEnd` | `false` | 回合结束时播报"第 N 轮对话完成/中断/异常结束"（`turn/end`） |
 | `announceCommandDone` | `false` | 命令执行完成/失败时播报（`command/done`） |
 | `announceGoalChange` | `false` | 目标创建/更新/完成/暂停/恢复时播报（`goal/change`，含目标标题前 40 字） |
-| `announceToolErrors` | `false` | 工具调用返回错误时播报"工具调用出错"（英文错误详情/技术 code 截掉，只保留中文详情；`tool/result` 带 `error` 或 `isError` 内容块时） |
+| `announceToolErrors` | `false` | 工具调用返回错误时播报"工具调用出错"（英文错误详情/技术 code 截掉，只保留中文详情）。触发条件：`tool/result` 带 `error`（结构化失败身份）或结果块 `isError === true`。注意 **shell 命令非零退出不算**——pwsh/bash 把 `exit code: N` 当结果数据上报（dsh 明文如此设计），只有基础设施失败（spawn 错误、abort）和 fs 这类结构化失败才置 `isError` |
 | `announceTodoWrite` | `false` | agent 更新待办列表时播报"待办已更新：n/m 完成"（`todo/write`） |
 
 #### 超长文本模式
@@ -313,7 +325,12 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
 - **`message`**（默认）：念 `longTextMessage`（`本次播报内容较长，请自行阅读。`，
   可在 UI 或 YAML 里编辑）。
 - **`heading`**：在原始文本里挑**最大字号**的 markdown 标题——`#` 数量最少者优先，
-  并列取第一个；没有标题行则取第一个非空行。选中的候选仍会清洗并受 `maxChars`
+  并列取第一个。**整段没有任何标题时**改念"有头有尾的开头"：取开头 `maxChars`
+  长度的窗口并回退到窗口内最后一个句末标点；若这样会砍掉半个窗口以上则保留整窗。
+  句末标点中英双语识别：全角 `。！？；` 与 `…` 无条件算；半角 `.!?;` 只在后面跟
+  空白、右引号/右括号时才算，落在窗口最后一位时会**多读一位**判断——所以英文
+  「句号+空格」在边缘照样算，而 `Version 0.1.` 这种小数点不算。（1.8.0 之前这里只念
+  第一个非空行，听感上就是"从第二行开始不念了"。）选中的候选仍会清洗并受 `maxChars`
   上限约束，若其本身仍超长则回退提示语。
 
 完整架构与设计取舍见 [docs/DESIGN.zh-CN.md](docs/DESIGN.zh-CN.md)。
@@ -332,6 +349,14 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
    ```
 
    然后在 config 块里指向你的副本：
+
+   > **Windows：务必保住文件的 UTF-8 BOM。** `speak.ps1` 是 UTF-8 脚本，而 Windows
+   > PowerShell 5.1 只能靠开头那三个字节 `EF BB BF` 知道这一点；编辑器保存时若把它
+   > 丢掉，系统会改用 ANSI 代码页解码，脚本里的中文会变乱码——症状是**静默无声或
+   > 修剪错乱，且不报错**。为此仓库里的脚本已把**逻辑部分全部写成纯 ASCII**，所以
+   > 丢 BOM 只会让中文注释和默认提示语变乱码。改完可以用
+   > `Get-Content -Encoding Byte -TotalCount 3 你的-speak.ps1` 检查（应为 `239 187 191`），
+   > 或跑 `node scripts/test-engine-static.js`。
 
    ```yaml
    - insert:
@@ -354,6 +379,8 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
 | ---- | ---- | ---- |
 | 完全没有声音、无报错 | 未启用/安装自然语音 | Win11：在 设置 → 讲述人/语音 中启用自然语音；Win10：安装 NaturalVoiceSAPIAdapter 并下载语音包。直接测 `speak.ps1` |
 | 长回复从不播报 | 适配器单次 `Speak` 有字数上限 | 已默认在 300 字处守卫——必要时调低 `-MaxChars` |
+| 念到第二行就停/像是被切断 | `longTextMode: heading` 下，文本超过 `maxChars` 且整段没有 markdown 标题时，旧版引擎只念第一个非空行（1.8.0 之前） | 1.8.0 已修（改念"有头有尾的开头"）；想换策略可用 `message` 模式或调高 `maxChars` |
+| 听到 `工具调用出错：Error: cannot read …` | "是否中文"的详情判据只检查"含有汉字"，英文报错里夹着中文目录名就能骗过它（1.8.0 引入的回归） | 1.8.0 已修——详情需满足"汉字数量多于拉丁字母数量" |
 | 含大量 emoji 的文本静默 | SAPI 遇到 emoji 会静默失败 | 引擎已自动剥离 |
 | 插件加载失败 | 插件名用了 Windows 原始路径 | 改用 `file:///C:/…` URL 形式（安装脚本会自动处理） |
 | macOS：音色突然变成"婷婷" | 打开过"朗读内容 / Siri 声音"设置面板导致系统朗读声音漂移 | 系统设置 → 辅助功能 → 阅读与朗读 → 系统声音 → ⓘ 入口重新选择 |
@@ -378,6 +405,15 @@ client/
   client.js              DSH 浏览器端 bundle：回合尾部 Speak/Stop 按钮 + 设置 → dsh-speak 设置页
 docs/
   DESIGN.zh-CN.md        完整设计文档：设计取舍、踩坑记录、扩展指南
+scripts/                 测试 + 手动开发辅助脚本（不随 npm 包发布）
+  test-engine-static.js    引擎静态不变量：.ps1 的 BOM + PowerShell 语法解析、.sh 的 LF（prepublishOnly 也会跑）
+  test-engine-longtext.js  两个引擎的长文守卫契约（speak.ps1 -DryRun / speak.sh 的 perl）
+  test-speech-hook.js      宿主插件：事件触发、队列、工具出错详情过滤
+  test-client-bundle.js    浏览器 bundle：slot 注册 + 组件渲染
+  test-settings-integration.js  settings 服务接线 + 已删除 API 的回归守卫
+  session-log-dump.js      读取 DSH 会话日志（手动：看引擎究竟收到了什么文本）
+  settings-ui-check.py     Playwright UI 检查（手动：需要运行中且已鉴权的 dsh）
+  dsh-events-check.py      Playwright 折叠行检查（手动）
 ```
 
 ## 编写新适配器

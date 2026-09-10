@@ -29,6 +29,9 @@ param(
     [int]$Volume = 50,
     [int]$Rate = 1,
     [int]$MaxChars = 300,
+    # 本脚本唯一的非 ASCII 代码字面量。丢了 UTF-8 BOM 时 PowerShell 5.1 会按 ANSI
+    # 代码页把它解码成乱码——DSH 插件总是显式传 -LongTextMessage，所以只影响手动
+    # CLI 调用；脚本逻辑（句末判定 / 字符过滤 / 分句）已全部改成纯 ASCII 源码。
     [string]$LongTextMessage = '本次播报内容较长，请自行阅读。',
     [ValidateSet('message', 'heading')]
     [string]$LongTextMode = 'message',
@@ -41,11 +44,15 @@ param(
     [int]$CodeBlockMaxChars = 300,
     [string]$CodeBlockReplacementText = 'You can see the code in our history.',
     # 手动重播完整朗读：跳过超长文本的 heading/message 截断，分段完整朗读
-    [string]$FullRead = '0'
+    [string]$FullRead = '0',
+    # 只把「将要朗读的文本」按 UTF-8 写到 stdout、完全不出声（调试清洗与长文
+    # 守卫用；正常调用无需传，插件不会传）
+    [string]$DryRun = '0'
 )
 
 $cleanMarkdown = $CleanMarkdownFormatting -in @('1', 'true', 'yes', 'on')
 $readInlineCode = $ReadInlineCode -in @('1', 'true', 'yes', 'on')
+$dryRunMode = $DryRun -in @('1', 'true', 'yes', 'on')
 # 注意：PowerShell 变量大小写不敏感，内部变量名不能与参数名仅差大小写
 # （曾用 $fullRead 导致自赋值污染参数 $FullRead，使 -not 判断失效）
 $fullReadMode = $FullRead -in @('1', 'true', 'yes', 'on')
@@ -61,13 +68,12 @@ if (-not $text -or -not $text.Trim()) { exit 0 }
 
 # ---------- length guard: adapter per-Speak ceiling ----------
 # 'message': fixed prompt. 'heading': speak the largest markdown heading instead
-# (fewest '#' wins, tie -> first; no heading -> first non-empty line; the
-# cleaned candidate is still subject to the ceiling below). FullRead 手动重播
-# 跳过该守卫（见文件底部"完整朗读"分支）。
-if (-not $fullReadMode -and $text.Length -gt $MaxChars -and $LongTextMode -eq 'heading') {
+# (fewest '#' wins, tie -> first; with NO heading, speak a coherent opening of
+# the text — see below; the cleaned candidate is still subject to the ceiling
+# below). FullRead 手动重播跳过该守卫（见文件底部"完整朗读"分支）。
+if (-not $fullReadMode -and $MaxChars -gt 0 -and $text.Length -gt $MaxChars -and $LongTextMode -eq 'heading') {
     $candidate = ''
     $bestLevel = 7
-    $firstNonEmpty = ''
     # 代码块 fence 内的行跳过：其中的 "# 注释" 不是 markdown 标题，
     # 否则长回复里的代码注释会被误当成标题只念注释
     $inCodeBlock = $false
@@ -80,12 +86,50 @@ if (-not $fullReadMode -and $text.Length -gt $MaxChars -and $LongTextMode -eq 'h
                 $bestLevel = $level
                 $candidate = $line -replace '^\s*#+\s*', ''
             }
-        } elseif (-not $firstNonEmpty -and $line.Trim()) {
-            $firstNonEmpty = $line
         }
     }
-    if (-not $candidate) { $candidate = $firstNonEmpty }
-    if ($candidate) { $text = $candidate }
+    if ($candidate) {
+        # 有标题：只念最大的标题（"长回复只报标题"）
+        $text = $candidate
+    } else {
+        # 没有标题：**不能只念第一个非空行** —— 那会念出"……官方文档写明："这类
+        # 断头句然后静默停住，听感上就是"从第二行开始不念了"（1.8.0 修复）。
+        # 改为取开头 MaxChars 长度的窗口，并在窗口内最后一个句末标点处收尾。
+        # 中英双语判据：
+        #   * 全角 。！？； 与省略号 … 无条件算句末（中文标点不含歧义）；
+        #   * 半角 .!?; 只在后面跟空白、右引号/右括号时才算，否则 "0.1.2"、
+        #     "file.txt"、"e.g." 里的小数点/扩展名会被当成句子结尾；
+        #   * 半角标点不认"到窗口结尾"本身就结束：窗口末尾若是小数点，认了等于没
+        #     修剪。但会多读一位来判断（见下），所以"句号+空格"在窗口边缘照样成立。
+        # 收尾后若不足半个窗口，就保留整个窗口：一整句超长文本不该被砍成一个词。
+        #
+        # 标点类一律用 [char] 码位拼出来，让源码里**不出现非 ASCII 代码字面量**：
+        #   1) PowerShell 把 ’ ” ‘ “ 也当字符串引号，直接写进单引号串会提前截断
+        #      （报 Missing ')' in method call）；
+        #   2) 更要紧的是——脚本一旦丢掉 UTF-8 BOM，Windows PowerShell 5.1 会按
+        #      ANSI 代码页解码，代码里的中文标点会变乱码，句末判定**静默失效**。
+        #      代码保持纯 ASCII 后，丢 BOM 只会让中文注释变乱码，不影响行为。
+        #   。 ！ ？ ； … = 0x3002 0xFF01 0xFF1F 0xFF1B 0x2026
+        #   ） 】 」 』 = 0xFF09 0x3011 0x300D 0x300F
+        $fullWidthEnders = [string]([char]0x3002) + [char]0xFF01 + [char]0xFF1F + [char]0xFF1B + [char]0x2026
+        $closers = [string]([char]0x22) + [char]0x201D + [char]0x2019 + [char]0xFF09 + [char]0x3011 + [char]0x300D + [char]0x300F + [char]0x29 + '\' + [char]0x5D + [char]0x7D
+        $sentenceEndPattern = '(?:[' + $fullWidthEnders + ']|[.!?;](?=[\s' + $closers + ']))'
+        $window = $text.Substring(0, [Math]::Min($text.Length, $MaxChars))
+        # 多看一个字符再判定，但只在窗口内收尾：句号落在窗口最后一位时，它后面那个
+        # 空格在窗口之外，多看一位才能认出"句号+空格"确实是句末；而"句号+数字"
+        # （`Version 0.1.` 的第 300 位）依旧被拒。切点永远不超过窗口长度。
+        $scan = $text.Substring(0, [Math]::Min($text.Length, $MaxChars + 1))
+        # 取**落在窗口内**的最后一个句末标点：scan 多读的那一位会让最后一个匹配可能
+        # 落在窗口之外（窗口外正好是个全角句号时），那种匹配必须忽略——但也不能因此
+        # 丢掉窗口内更早的合法边界，所以逐个过滤而不是只看最后一个。
+        $cut = 0
+        foreach ($match in [regex]::Matches($scan, $sentenceEndPattern)) {
+            $end = $match.Index + $match.Length
+            if ($end -le $window.Length) { $cut = $end }
+        }
+        if ($cut -ge [Math]::Floor($window.Length / 2)) { $window = $window.Substring(0, $cut) }
+        $text = $window
+    }
 }
 
 # ---------- clean: Markdown -> natural speech text ----------
@@ -104,12 +148,26 @@ if ($cleanMarkdown) {
     $text = $text -replace '[*_~]+', ''
 }
 # Keep all Unicode letters, including Portuguese accents; remove unsafe symbols.
-$text = [regex]::Replace($text, '[^\p{L}\p{N}一-龥　-〿＀-￯ -⁯ -~]', '')
+# 范围写成 \u 转义（纯 ASCII 源码，丢 BOM 也不会乱码）：
+#   \u4e00-\u9fa5 汉字、\u3000-\u303f 中文标点、\uff00-\uffef 全角、
+#   \u2000-\u206f 通用标点（含 … 和 —）、\u0020-\u007e ASCII 可打印。
+$text = [regex]::Replace($text, '[^\p{L}\p{N}\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef\u2000-\u206f\u0020-\u007e]', '')
 $text = $text -replace '\s+', ' '
 $text = $text.Trim()
 
 # ---------- final ceiling (also catches over-long heading candidates) ----------
 if (-not $fullReadMode -and $text.Length -gt $MaxChars) { $text = $LongTextMessage }
+
+# ---------- dry run: expose the text that would be spoken, silently ----------
+# Maintainer aid: makes the cleaning pipeline and the long-text guard observable
+# without a speaker, so a truncated candidate can be diffed against its source.
+# Written as raw UTF-8 bytes so a redirected capture never depends on the
+# console code page.
+if ($dryRunMode) {
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($text)
+    [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)
+    exit 0
+}
 
 # ---------- speak ----------
 Add-Type -AssemblyName System.Speech
@@ -132,7 +190,8 @@ $synth.Rate = $Rate
 # 标点切成不超过 450 字的段，逐段朗读（自动播报不经过这里，走上面的守卫）。
 $SPEAK_CHUNK = 400
 if ($fullReadMode -and $text.Length -gt $SPEAK_CHUNK) {
-    $parts = [regex]::Split($text, '(?<=[。！？；.!?;])')
+    # 分句标点同样用 \u 转义（纯 ASCII 源码）
+    $parts = [regex]::Split($text, '(?<=[\u3002\uff01\uff1f\uff1b.!?;])')
     $chunk = ''
     foreach ($part in $parts) {
         if ($part.Length -eq 0) { continue }

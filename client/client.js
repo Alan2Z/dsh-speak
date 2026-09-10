@@ -225,44 +225,61 @@ window.__ModuleLoader__.load({
       function visibleText(node) {
         return Array.isArray(node && node.blocks) ? node.blocks.filter(block => block && block.kind === 'text' && typeof block.text === 'string').map(block => block.text).join('') : ''
       }
+      // Constant selector used when the framework does not hand us a Chat target
+      // hook: the selectors then see no snapshot and the button renders disabled
+      // instead of crashing its row.
+      function useAbsentChat(selector) { return selector(null) }
+      /**
+       * Find the finalized assistant node carrying `messageId` in the Chat target.
+       *
+       * DSH >= 0.1.2 excludes Conversation target data from the Session snapshot,
+       * so the chat nodes are no longer reachable through `useSession`; the Chat
+       * target selector hook (`useChat`, declared by
+       * `@deepseek-ai/dsh-client-ui-chat` for every session-scoped slot) is the
+       * only read path. `snapshot.nodes` is a ChatNodeStore whose `values()` are
+       * the `{ key, kind, data, location }` nodes: the finalized assistant
+       * content lives in `data.finalNode` (assistant node) or
+       * `data.closing.finalNode` (turn-tail node), carrying messageId / turn /
+       * seq / blocks.
+       */
+      function finalNodeFor(snapshot, messageId) {
+        const nodes = snapshot && snapshot.nodes
+        if (!nodes || typeof nodes.values !== 'function') return null
+        for (const node of nodes.values()) {
+          const data = node && node.data
+          if (!data) continue
+          const final = data.finalNode || (data.closing && data.closing.finalNode) || (node.kind === 'assistant' ? data : null)
+          if (final && final.messageId != null && String(final.messageId) === messageId) return final
+        }
+        return null
+      }
       function SpeakAction(props) {
         const messageId = props.messageId == null ? null : String(props.messageId)
-        const turnData = props.useSession(snapshot => {
-          // DSH 会话投影：snapshot.chat.nodes 是按 key 索引的 Map，value 为
-          // { key, kind, data, location }。最终 assistant 消息内容在节点的
-          // data.finalNode（assistant 节点）或 data.closing.finalNode
-          // （turn-tail 节点）里，含 messageId / turn / seq / blocks。
-          const nodes = snapshot && snapshot.chat && snapshot.chat.nodes
-          if (!nodes || typeof nodes.values !== 'function') return { turn: null, text: '' }
-          const all = [...nodes.values()]
-          const finalOf = node => {
-            const d = node && node.data
-            if (!d) return null
-            if (d.finalNode) return d.finalNode
-            if (d.closing && d.closing.finalNode) return d.closing.finalNode
-            return d.kind === 'assistant' ? d : null
-          }
-          const entries = all.map(node => ({ final: finalOf(node) }))
-          const addressed = entries.find(entry => entry.final && String(entry.final.messageId) === messageId)
-          if (!addressed || !Number.isFinite(addressed.final.turn)) return { turn: null, text: '' }
-          const turn = addressed.final.turn
-          // 只重播点击的那条消息（assistant-actions 只渲染在回合尾部 = 最终回复），
-          // 不合并整个回合的所有中间消息
-          const text = visibleText(addressed.final)
-          return { turn, text }
+        // Both selectors return primitives: `useChat` is a snapshot selector
+        // hook, and a fresh object per read would make the subscription churn.
+        const useChat = typeof props.useChat === 'function' ? props.useChat : useAbsentChat
+        const turn = useChat(snapshot => {
+          const final = finalNodeFor(snapshot, messageId)
+          return final && Number.isFinite(final.turn) ? final.turn : null
+        })
+        // 只重播点击的那条消息（assistant-actions 只渲染在回合尾部 = 最终回复），
+        // 不合并整个回合的所有中间消息
+        const text = useChat(snapshot => {
+          const final = finalNodeFor(snapshot, messageId)
+          return final ? visibleText(final) : ''
         })
         const active = useSpeechState()
-        const speaking = active.speaking && String(active.sessionId) === String(props.sessionId) && active.turn === turnData.turn
+        const speaking = active.speaking && String(active.sessionId) === String(props.sessionId) && active.turn === turn
         const [pending, setPending] = React.useState(false)
         const label = speaking ? t('actionStop') : t('actionSpeakTurn')
         return e('button', {
           type: 'button', className: 'dsh-speak-message-action', 'aria-label': label, 'aria-pressed': speaking,
-          'data-speaking': speaking || undefined, title: label, disabled: pending || !turnData.text.trim(),
+          'data-speaking': speaking || undefined, title: label, disabled: pending || !text.trim(),
           onClick: () => {
             if (pending) return
             setPending(true)
             const action = speaking ? 'stop' : 'play'
-            const payload = speaking ? { action } : { action, sessionId: props.sessionId, turn: turnData.turn, messageId, text: turnData.text }
+            const payload = speaking ? { action } : { action, sessionId: props.sessionId, turn, messageId, text }
             void control(payload).catch(console.error).finally(() => setPending(false))
           },
         }, speaking ? e(IconPauseOutline16) : e(IconVolume2))

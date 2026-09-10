@@ -19,8 +19,9 @@
 //       - on: every assistant/message is enqueued immediately as it arrives
 //   * a `/dsh-speak/control` POST route (play/stop/status) and a
 //     `/dsh-speak/ws` WebSocket publish the authoritative speech state
-//   * a `dsh-speak` settings namespace via installSettingsSection; schema
-//     defaults → patch config → UI user layer
+//   * a `dsh-speak` settings namespace registered through the settings SERVICE
+//     (`ctx.inject(['settings'])` → `settings.register`); schema defaults →
+//     patch config → UI user layer
 //   * `enabled` master switch: when off, nothing is ever enqueued (no sound)
 //
 // Trigger semantics:
@@ -72,7 +73,7 @@ function resolveEngine(override) {
 const DEFAULT_MAX_CHARS = process.platform === 'darwin' ? 0 : 300
 
 // ---------------------------------------------------------------------------
-// Settings namespace (best-effort; see installSettingsSection in dsh-settings)
+// Settings namespace (best-effort; registered through the `settings` service)
 // ---------------------------------------------------------------------------
 // The schema mirrors every config key. Values resolve as:
 // schema default → patch `config` (base) → user settings layer (the UI).
@@ -141,14 +142,29 @@ function resolveConfig(value) {
 }
 
 /**
- * Build the settings schema + entry for installSettingsSection. Best-effort:
+ * Resolve a module specifier from the plugin's own location first, then from
+ * the booted profile tree. `@deepseek-ai/schemastery` is a peer of this package
+ * and lives beside it after an npm/pnpm install; the profile-tree fallback
+ * covers the file:// install used by install.ps1 and repo checkouts.
+ * @returns the module, or null when neither base resolves it.
+ */
+function requirePeer(ctx, spec) {
+  const bases = [__filename, ctx.baseUrl].filter(Boolean)
+  for (const base of bases) {
+    try { return createRequire(base)(spec) } catch (e) { /* try the next base */ }
+  }
+  return null
+}
+
+/**
+ * Build the settings schema + entry for the settings namespace. Best-effort:
  * any failure (missing peer packages) returns null and the plugin keeps the
- * patch config. The registration itself happens on a timer tick in apply.
+ * patch config.
  */
 function buildSettingsNamespace(ctx, patch) {
   try {
-    const profileRequire = createRequire(ctx.baseUrl || __filename)
-    const z = profileRequire('@deepseek-ai/schemastery')
+    const z = requirePeer(ctx, '@deepseek-ai/schemastery')
+    if (!z) throw new Error('@deepseek-ai/schemastery 不可解析')
     const schema = z.object({
       enabled: z.boolean().default(true),
       automaticSpeech: z.boolean().default(true),
@@ -188,33 +204,49 @@ module.exports = {
     config = config || {}
     let cfg = resolveConfig(config)
 
-    // Register the settings namespace on a timer tick so apply never blocks;
-    // cfg is replaced wholesale on settings changes.
-    ctx.inject(['timer'], timerCtx => {
-      timerCtx.timer.timeout(() => {
-        const prepared = buildSettingsNamespace(ctx, config)
-        if (!prepared) return
-        let settingsModule
-        try {
-          const profileRequire = createRequire(ctx.baseUrl || __filename)
-          settingsModule = profileRequire('@deepseek-ai/dsh-settings')
-        } catch (e) {
-          log('dsh-settings 不可用，跳过 settings namespace 注册:', e && e.message)
-          return
-        }
-        // Keep a live source getter: installSettingsSection passes the resolved
-        // scope thunk to setSource, and onChange must re-derive cfg from it
-        // (installSettingsSection only calls setSource on attach/detach).
+    // ---- settings namespace -------------------------------------------------
+    // Wire the namespace through the settings SERVICE.
+    //
+    // dsh 0.1.2-alpha.1 deleted the `installSettingsSection` / `settingsNamespace`
+    // convenience exports from `@deepseek-ai/dsh-settings`; what remains — and
+    // has not changed since 0.1.0-rc.7 — is the `settings` service itself
+    // (`ctx.settings.register(ns, schema, { base })` → `{ get, watch, update,
+    // replace }`). Referencing the removed names is fatal: an ESM named import
+    // of a deleted export is a module-evaluation SyntaxError that kills the host
+    // boot, and a lazy `settingsModule.installSettingsSection(...)` call — what
+    // this plugin used to do inside a timer callback — throws
+    // `settingsNamespace is not a function` and crashed dsh before it served.
+    //
+    // `ctx.inject(['settings'])` is the graceful-degradation boundary: on a host
+    // with no settings provider the callback never runs and the composed patch
+    // config stands as-is.
+    const prepared = buildSettingsNamespace(ctx, config)
+    if (prepared) {
+      ctx.inject(['settings'], scopedCtx => {
+        // `scope.get()` is the live resolved value (schema default → patch
+        // config → UI user layer), so re-deriving cfg from it on every change
+        // is what makes a settings edit take effect without a restart.
         let settingsSource = () => prepared.entry
-        settingsModule.installSettingsSection(ctx, settingsModule.settingsNamespace(SETTINGS_NS), prepared.schema, prepared.entry, {
-          setSource: source => { settingsSource = source; cfg = resolveConfig(source()) },
-          onChange: () => {
-            try { cfg = resolveConfig(settingsSource()) } catch (e) { log('settings 变更应用失败:', e && e.message) }
-            log('settings 变更已应用; cfg=', JSON.stringify(cfg))
-          },
-        })
-      }, 0)
-    })
+        const applySettings = () => {
+          try { cfg = resolveConfig(settingsSource()) } catch (e) { log('settings 变更应用失败:', e && e.message) }
+        }
+        try {
+          const scope = scopedCtx.settings.register(SETTINGS_NS, prepared.schema, { base: prepared.entry })
+          settingsSource = () => scope.get()
+          // Unload restores the composed entry, so a disabled plugin cannot
+          // leave the queue reading a value nobody can see or change any more.
+          scopedCtx.effect(() => () => {
+            settingsSource = () => prepared.entry
+            applySettings()
+          })
+          scope.watch(applySettings)
+          applySettings()
+          log('settings namespace 已注册:', SETTINGS_NS)
+        } catch (e) {
+          log('settings namespace 注册失败，继续使用 patch config:', e && e.message)
+        }
+      })
+    }
 
     // ---- host-owned FIFO speech queue + WebSocket state sync (PR #2) ----
     let activeSpeech = null
@@ -516,16 +548,31 @@ module.exports = {
         if (type === 'tool/result' && cfg.announceToolErrors) {
           const data = event.data
           const err = data && data.error
-          // 真实错误标记：error 字段（name/code）或 message 内容块 isError === true
-          // （pwsh 等工具失败时没有 error 字段，错误文本在 isError 内容块里）
+          // 真实错误标记有两处：结构化失败身份 data.error（name/code），以及结果块上的
+          // isError。0.1.2 起 createToolResultMessage 把结果块包进一个 ToolResultBlock
+          // （{ type:'tool-result', toolCallId, content:[…], isError }），文字在它嵌套的
+          // content 里；更早的版本把 isError 直接放在 text 块上。两种形状都读。
+          //
+          // 注意：pwsh / bash 把「命令非零退出」当作结果数据上报（`exit code: N`），
+          // 不置 isError —— 只有基础设施失败（spawn 错误、abort）才是 isError 结果，
+          // 所以失败的命令本身不会播报工具出错。
           const errText = (Array.isArray(data && data.message && data.message.content) ? data.message.content : [])
             .filter(block => block && block.isError === true)
-            .map(block => block.text || block.code || '').filter(Boolean).join(' ')
+            .map(block => {
+              const parts = Array.isArray(block.content) ? block.content : [block]
+              return parts.map(part => (part && (part.text || part.code)) || '').filter(Boolean).join(' ')
+            })
+            .filter(Boolean).join(' ')
           if (err || errText) {
             const detail = (errText || (err && err.code) || (err && err.name) || '').replace(/\s+/g, ' ').trim().slice(0, 60)
-            // 纯英文错误详情（PowerShell 固定模板 / 技术 code）对中文用户可读性差，
-            // 播报时截掉，只保留含中文的详情（如"文件不存在"）
-            const readable = /[\u4e00-\u9fff]/.test(detail) ? `：${detail}` : ''
+            // 详情只在"确实是一句中文描述"时才念：英文模板（Error: / ENOENT / 技术
+            // code）对中文用户可读性差，应当截掉。判据是**汉字数量多于拉丁字母数量**，
+            // 而不是"含有汉字"——后者会被路径里的中文目录名骗过：
+            // `Error: cannot read "D:\...\第二轮测试用的不存在文件.txt"` 含 12 个汉字，
+            // 却是纯英文报错（1.8.0 修正）。
+            const cjkCount = (detail.match(/[\u4e00-\u9fff]/g) || []).length
+            const latinCount = (detail.match(/[A-Za-z]/g) || []).length
+            const readable = cjkCount > latinCount ? `：${detail}` : ''
             enqueue(hostItem('tool/result', session, event, `工具调用出错${readable}`, null))
           }
           return

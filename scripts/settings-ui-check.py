@@ -1,9 +1,12 @@
 # settings-ui-check.py — full settings-page UI verification:
 # entry label, bilingual text, master switch, disclosures, instant-apply toggles.
+# Manual helper (NOT part of `npm test`): needs Playwright plus a running,
+# authenticated DSH web app — point BASE at it with DSH_WEB_URL, e.g.
+#   $env:DSH_WEB_URL = "http://127.0.0.1:3080"; python scripts/settings-ui-check.py
 from playwright.sync_api import sync_playwright
-import json, urllib.request, time
+import json, os, urllib.request, time
 
-BASE = "http://127.0.0.1:3080"
+BASE = os.environ.get("DSH_WEB_URL", "http://127.0.0.1:3080").rstrip("/")
 
 def control(action, text=None):
     body = {"action": action}
@@ -37,7 +40,7 @@ with sync_playwright() as p:
 
     body = pg.inner_text("body")
     # 3. core toggles / labels present
-    for label in ["总开关", "自动播报", "入队所有消息", "Markdown 清理", "审批请求", "提问", "可选事件播报"]:
+    for label in ["总开关", "自动朗读", "入队所有消息", "Markdown 清理", "播报审批", "播报提问", "可选事件播报"]:
         check(f"设置项可见: {label}", label in body)
 
     # 4. optional-events disclosure expands to five toggles

@@ -210,6 +210,63 @@ async function main() {
   assert.ok(announced.some(t => t === '工具调用出错：文件不存在，请检查路径'),
     `chinese detail kept: ${JSON.stringify(announced)}`)
 
+  // ---- 10c. 0.1.2+ shape: the result block is wrapped in a ToolResultBlock ----
+  // createToolResultMessage nests the raw blocks under
+  // { type:'tool-result', toolCallId, content:[…], isError } — the flagged block
+  // carries no text of its own, so the detail must be read from its content.
+  const t10c = applyWith({ announceToolErrors: true, throttleMs: 10 })
+  t10c.fire('tool/result', { message: { content: [{
+    type: 'tool-result', toolCallId: 'c1', isError: true, content: [{ type: 'text', text: '文件不存在，请检查路径' }],
+  }] } })
+  await t10c.flush(20)
+  await t10c.finishAll()
+  await t10c.flush(20)
+  assert.ok(announced.some(t => t === '工具调用出错：文件不存在，请检查路径'),
+    `0.1.2+ wrapped isError detail read from nested content: ${JSON.stringify(announced)}`)
+
+  // ---- 10d. a failing shell command is reported, not errored (host policy) ----
+  // pwsh/bash settle a non-zero exit as result data (`exit code: N`) with no
+  // isError, so announceToolErrors deliberately stays silent.
+  const t10d = applyWith({ announceToolErrors: true, throttleMs: 10 })
+  t10d.fire('tool/result', { message: { content: [{
+    type: 'tool-result', toolCallId: 'c2', content: [{ type: 'text', text: 'Get-Content: 找不到路径\nexit code: 1' }],
+  }] } })
+  await t10d.flush(20)
+  await t10d.finishAll()
+  await t10d.flush(20)
+  assert.ok(!announced.some(t => t.startsWith('工具调用出错')),
+    `reported-not-errored shell failure stays silent: ${JSON.stringify(announced)}`)
+
+  // ---- 10e. English error text is dropped even when the PATH contains Chinese ----
+  // Regression (1.8.0): reading the nested content made the detail non-empty, and
+  // the "is it Chinese?" gate only tested for the PRESENCE of a CJK character. A
+  // path like ...\.第二轮测试用的不存在文件.txt satisfied it, so a pure English
+  // error was read aloud: `工具调用出错：Error: cannot read "D:\...".
+  const t10e = applyWith({ announceToolErrors: true, throttleMs: 10 })
+  t10e.fire('tool/result', { message: { content: [{
+    type: 'tool-result', toolCallId: 'c3', isError: true,
+    content: [{ type: 'text', text: 'Error: cannot read "D:\\Projects\\dsh-speak\\.第二轮测试用的不存在文件.txt": not found' }],
+  }] } })
+  await t10e.flush(20)
+  await t10e.finishAll()
+  await t10e.flush(20)
+  assert.ok(announced.includes('工具调用出错'),
+    `english error with a Chinese path stays bare: ${JSON.stringify(announced)}`)
+  assert.ok(!announced.some(t => t.startsWith('工具调用出错：')),
+    `no detail may be spoken for an English error: ${JSON.stringify(announced)}`)
+
+  // ---- 10f. a mostly-Chinese mixed detail is still kept ----
+  const t10f = applyWith({ announceToolErrors: true, throttleMs: 10 })
+  t10f.fire('tool/result', { message: { content: [{
+    type: 'tool-result', toolCallId: 'c4', isError: true,
+    content: [{ type: 'text', text: '读取配置文件失败 ENOENT' }],
+  }] } })
+  await t10f.flush(20)
+  await t10f.finishAll()
+  await t10f.flush(20)
+  assert.ok(announced.some(t => t === '工具调用出错：读取配置文件失败 ENOENT'),
+    `mostly-Chinese detail kept: ${JSON.stringify(announced)}`)
+
   // ---- 11. multi-question: each question separate, numbered, gap between ----
   const t11 = applyWith({ announceQuestions: true, questionGapMs: 2000, throttleMs: 10 })
   t11.fire('tool/call', { name: 'ask_user_question', arguments: JSON.stringify({ questions: [

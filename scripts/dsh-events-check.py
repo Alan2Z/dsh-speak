@@ -1,11 +1,16 @@
 # dsh-events-check.py — verify the "可选事件播报" DisclosureRow expands and
 # shows its five toggles (was broken: open hardcoded false + no-op onToggle).
+# Manual helper (NOT part of `npm test`): needs Playwright plus a running,
+# authenticated DSH web app — point BASE at it with DSH_WEB_URL.
+import os
 from playwright.sync_api import sync_playwright
+
+BASE = os.environ.get("DSH_WEB_URL", "http://127.0.0.1:3080").rstrip("/")
 
 with sync_playwright() as p:
     b = p.chromium.launch(headless=True)
     pg = b.new_page(viewport={"width": 1440, "height": 1400})
-    pg.goto("http://127.0.0.1:3080/", wait_until="domcontentloaded", timeout=30000)
+    pg.goto(BASE + "/", wait_until="domcontentloaded", timeout=30000)
     pg.wait_for_timeout(4000)
     pg.get_by_text("设置", exact=True).first.click(timeout=5000)
     pg.wait_for_timeout(1000)

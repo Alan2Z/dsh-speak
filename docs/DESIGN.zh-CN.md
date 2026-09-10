@@ -86,8 +86,11 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
 3. **剥离 emoji / 不可打印字符** — 只保留中文汉字、中文标点、全角区间、
    ASCII 可打印（正则 `[^一-龥　-〿＀-￯ -⁯ -~]`）。
 4. **压缩空白。**
-5. **长度守卫** — 清洗后文本超过 `MaxChars`（默认 300）时，替换为
-   `LongTextMessage`（默认：`本次播报内容较长，请自行阅读。`）。
+5. **长度守卫** — 超过 `MaxChars`（默认 300）的文本由 `LongTextMode` 决定：
+   `message`（默认）替换为 `LongTextMessage`（默认：`本次播报内容较长，请自行
+   阅读。`）；`heading` 念最大字号的 markdown 标题，而**整段没有标题时**改念
+   "有头有尾的开头"——取开头 `MaxChars` 窗口并回退到窗口内最后一个句末标点
+   （旧实现这里只念第一个非空行，听感上就是"从第二行开始不念了"）。
 6. **朗读** — `System.Speech.Synthesis.SpeechSynthesizer`，应用音量/语速，
    选择最佳 zh 自然语音，然后 `Speak()`。
 
@@ -119,13 +122,17 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
   事件；开 = 每条 assistant 消息立即入队朗读（中间消息也读）。
 - **可选事件播报**（1.6.0，默认全关）：`turn/end`、`command/done`、
   `goal/change`、`tool/result`（出错时）、`todo/write` 各自独立开关（见 §5）。
-- **settings namespace 注册**（1.6.0）：apply 后在一个 timer tick 里调用
-  `installSettingsSection(ctx, 'dsh-speak', schema, patchConfig, hooks)`，配置
-  解析为 schema 默认 → patch `config` → UI 用户设置三层。`onChange` 时通过
-  `settingsSource()` 重新解析 cfg（注意：`installSettingsSection` 只在
-  attach/detach 时调 `setSource`，变更时需自己在 `onChange` 里重读 source）。
-  若宿主没有 settings 服务（dsh < 0.1.0-rc.7 或未挂载 provider），注册静默
-  跳过，插件完全按 patch `config` 工作——向后兼容。
+- **settings namespace 注册**（1.6.0）：插件通过 settings **服务**接线——
+  `ctx.inject(['settings'])` → `settings.register('dsh-speak', schema, { base:
+  patchConfig })` → 每次 `scope.watch` 通知时从 `scope.get()` 重新解析 cfg，
+  fiber 卸载时恢复成组合层的 patch config。配置解析仍是 schema 默认 → patch
+  `config` → UI 用户设置三层。
+  插件**不再 import** `@deepseek-ai/dsh-settings`：DSH 0.1.2-alpha.1 删除了
+  `installSettingsSection` / `settingsNamespace` 两个辅助导出，引用它们是致命
+  的——缺失的具名导出会在模块求值期直接报错；旧代码在 timer 回调里懒调用，抛
+  `settingsNamespace is not a function` 把宿主打崩（dsh 直接退出 1，起不来）。
+  服务本身从未变过。宿主没有 settings 服务时 inject 回调永不执行，插件完全按
+  patch `config` 工作——优雅退化，无需版本判断。
 
 注册片段（`install.ps1` 也会自动完成；npm 安装用裸包名 `'dsh-speak'` 即可，
 这是文件安装方式用的路径）：
@@ -150,7 +157,12 @@ factory })`），注册两条 UI：
   `conversation.chat.assistant-actions` slot（该回合最终回复的操作栏）。点击 🔊
   调 `/dsh-speak/control` 重播该条最终回复，再点停止，点另一条切换；按钮状态
   （播放中/暂停）由 `/dsh-speak/ws` WebSocket 的 host 权威状态推导（session +
-  turn 身份匹配）。
+  turn 身份匹配）。重播文本改为通过 Chat 目标的 selector hook `useChat` 取
+  （`@deepseek-ai/dsh-client-ui-chat` 为所有 session 作用域 slot 声明了它）：
+  DSH 0.1.2 起 Session snapshot 不再携带 Conversation 目标数据，
+  `useSession(s => s.chat.nodes)` 已经取不到聊天节点。两个 selector 只返回原始值
+  （每次读返回新对象会让订阅反复失效），拿不到 `useChat` 时按钮退化为禁用，而不是
+  在自己的操作栏里抛错。
 - **设置 → dsh-speak 设置独立设置页**（1.7.0）：注册进 `settings.section` slot。
   用 `@deepseek-ai/dsh-client-ui-primitives` 的 Button/DisclosureRow/Input
   绘制（Toggle/Options/SettingInput 组件），所有配置项（总开关、自动朗读、
@@ -160,6 +172,10 @@ factory })`），注册两条 UI：
 
 - 包通过 `package.json` 的 `dsh.client: { platform: 'web' }` +
   `exports['./client']` 声明浏览器端；DSH 的 client-modules 扫描到后自动加载。
+  `dsh.client.inject` 列出**声明**它占用那两个 slot 的包 row
+  （`@deepseek-ai/dsh-client-ui-chat`、`@deepseek-ai/dsh-client-ui-settings`），
+  保证它们的 factory 先到达；`dsh.client.external` 列出
+  `@deepseek-ai/dsh-client-ui-primitives`（shell 的静态模块表里已 seed）。
 - **刻意手写、零构建**：只用平台 seed 模块 + 官方 primitives（bundle-purity
   gate 允许用 primitives，禁止 import 官方包内部组件），与构建出来的 bundle
   契约一致。
@@ -184,7 +200,7 @@ Claude Code *确实*有 Stop hook。hook JSON（含 `transcript_path`）从 stdi
 | `turn/end`（回合结束）           | 🟡 默认关；开则播报"第 N 轮对话完成/中断/异常结束" |
 | `command/done`（命令完成）       | 🟡 默认关；开则播报"命令执行完成/失败" |
 | `goal/change`（目标变更）        | 🟡 默认关；开则播报"已创建目标/目标已完成…（前 40 字）" |
-| `tool/result`（工具结果）        | 🟡 默认关；开则仅当带 `error` 或 `isError` 内容块时播报"工具调用出错"（英文详情/技术 code 截掉，只保留中文详情） |
+| `tool/result`（工具结果）        | 🟡 默认关；开则仅对**结构化失败**播报"工具调用出错"（带 `error`，或结果块 `isError === true`）。shell 命令非零退出是结果数据（`exit code: N`）而非错误——pwsh/bash 有意按"已完成调用"结算，所以只有基础设施失败（spawn 错误、abort）和 fs 这类结构化失败才播报。0.1.2 起结果块被包进 `ToolResultBlock`，文字在其嵌套的 `content[]` 里（英文详情/技术 code 截掉，只保留中文详情） |
 | `todo/write`（待办更新）         | 🟡 默认关；开则播报"待办已更新：n/m 完成" |
 
 | `assistant/message`（queueAllMessages 开）| ✅ 每条立即入队（中间消息也读） |
@@ -202,7 +218,8 @@ Claude Code *确实*有 Stop hook。hook JSON（含 `transcript_path`）从 stdi
 | `-Rate` | `1` | 语速（SAPI 刻度） |
 | `-MaxChars` | 平台相关 | 超过此长度时替换为 `LongTextMessage`（macOS 默认 0 = 不限） |
 | `-LongTextMessage` | `本次播报内容较长，请自行阅读。` | 超长文本时改念这句 |
-| `-LongTextMode` | `message` | `message`（固定提示语）\| `heading`（念最大字号 markdown 标题） |
+| `-LongTextMode` | `message` | `message`（固定提示语）\| `heading`（念最大字号 markdown 标题；**整段没有标题时改念"有头有尾的开头"**：取开头 `MaxChars` 窗口并回退到窗口内最后一个句末标点，若这样会砍掉半个窗口以上则保留整窗。全角 `。！？；…` 无条件算句末；半角 `.!?;` 只在后面跟空白、右引号/右括号时才算——最后一位会**多读一位**判断，所以英文「句号+空格」在边缘照样算，`Version 0.1.` 这种小数点不算） |
+| `-DryRun` | `0` | 把「将要朗读的文本」按 UTF-8 打到 stdout 后直接退出、完全不出声（调试清洗与长文守卫用） |
 | `-CleanMarkdownFormatting` | `true` | Markdown 转自然语音（保留链接文字去 URL） |
 | `-ReadInlineCode` | `true` | 朗读行内代码（去掉反引号） |
 | `-CodeBlocks` | `smart` | `all` \| `smart` \| `replace`（围栏代码块） |
@@ -259,6 +276,7 @@ config:
 | 6.6 | 用 ANSI 读写播报文本 | 乱码或完全无声 | 一律 UTF-8（`[System.IO.File]::ReadAllText(..., UTF8)`） |
 | 6.7 | 仓库内 `.sh` 被 git 按 `core.autocrlf=true` 检出为 CRLF，`npm pack` 打包的是**工作区**文件 | 发布包里的 `speak.sh` 在 macOS 上 bash 语法错误（`command not found`、`syntax error near {`），静默失败 | `.gitattributes` 里 `*.sh text eol=lf` 锁定 LF（发布前 `file engine/speak.sh` 确认无 CRLF） |
 | 6.8 | 日志路径写死 `/tmp` | macOS 上 `os.tmpdir()` 是 `/var/folders/.../T`，`/tmp` 里找不到日志 | 日志路径按 `os.tmpdir()`（= `$TMPDIR`）查找 |
+| 6.9 | 引擎 `.ps1` 被**丢掉 UTF-8 BOM** 保存（任何重写文件的编辑器/脚本都会丢——BOM 是字节级元数据而不是内容，文件里没有任何东西记录"我需要 BOM"） | Windows PowerShell 5.1 改用系统 ANSI 代码页解码，**代码里的中文标点**变乱码：emoji/CJK 过滤范围错乱会连中文一起丢掉（**静默无声**），句末标点类失配则修剪静默失效；中文注释只是显示为乱码 | 两条规则：(a) 引擎**代码保持纯 ASCII** ——PowerShell 的中文标点用 `[char]` 码位拼、范围写成 `\u` 转义，`speak.sh` 的 Perl 守卫也是同理用 `\x{...}` 码位转义（Perl 源码没有 `use utf8` 时按字节处理，模式里直接写中文会被当成 Latin-1 而**完全匹配不到**——这是 1.8.0 实际发布出去的 macOS 专属"完全不修剪"bug，由真机 `npm test` 抓出）；这样丢 BOM 只影响注释和两个默认提示语；(b) `scripts/test-engine-static.js` 对每个 `engine/*.ps1` 断言 BOM + PowerShell 语法解析（也挂 `prepublishOnly`），`scripts/test-engine-longtext.js` 断言抽出的 Perl 守卫是纯 ASCII |
 
 ## 7. 扩展
 

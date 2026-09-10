@@ -91,6 +91,18 @@ macOS:
 - Chinese voices: see the [macOS](#macos) section (incl. the Siri natural-voice
   picker and its pitfalls).
 
+DSH web app:
+
+- Tested against **DSH 0.1.5-rc.1**. Two host/client APIs changed after 0.1.1, both
+  handled here (1.8.0):
+  - `@deepseek-ai/dsh-settings` deleted the `installSettingsSection` /
+    `settingsNamespace` helpers — the plugin now registers its namespace through
+    the `settings` **service**. On those older releases the plugin aborted the
+    host boot (`settingsNamespace is not a function`); a missing settings provider
+    now just leaves the composed patch `config` in force.
+  - the Session snapshot stopped carrying Conversation target data — the 🔊 button
+    resolves the clicked message through the Chat target hook `useChat`.
+
 ## Install & quick start
 
 ### DSH — Option A: npm plugin (recommended)
@@ -324,7 +336,7 @@ document):
 | `announceTurnEnd` | `false` | announce "第 N 轮对话完成/中断/异常结束" on turn end (`turn/end`) |
 | `announceCommandDone` | `false` | announce when a command finishes or fails (`command/done`) |
 | `announceGoalChange` | `false` | announce goal created/updated/completed/paused/resumed (`goal/change`, objective head) |
-| `announceToolErrors` | `false` | announce "工具调用出错" when a tool call returns an error (`tool/result` with `error` or an `isError` content block; English details / technical codes dropped, Chinese details kept) |
+| `announceToolErrors` | `false` | announce "工具调用出错" when a tool call returns an error: `tool/result` carrying `error` (structured failure identity) or a result block with `isError === true`. A **non-zero shell exit does NOT count** — pwsh/bash report `exit code: N` as result data by design, so only infrastructure failures (spawn errors, aborts) and structured tool failures (e.g. fs) set `isError` (English details / technical codes dropped, Chinese details kept) |
 | `announceTodoWrite` | `false` | announce "待办已更新：n/m 完成" when the agent updates its todos (`todo/write`) |
 
 #### Long-text modes
@@ -334,9 +346,17 @@ When cleaned text exceeds `maxChars`:
 - **`message`** (default): speak `longTextMessage` (`本次播报内容较长，请自行阅读。`,
   editable in the UI or YAML).
 - **`heading`**: pick the *largest* markdown heading in the raw text — fewest `#`
-  wins, tie → first; if there is no heading line, the first non-empty line is used.
-  The chosen candidate is still cleaned and subject to the `maxChars` ceiling,
-  falling back to the message if it is itself too long.
+  wins, tie → first. When there is **no heading at all**, speak a coherent opening
+  instead of just the first line: the leading `maxChars` window, trimmed back to
+  its last sentence end, and kept whole when that would drop more than half the
+  window. Sentence ends are recognised bilingually: full-width `。！？；` and `…`
+  always count, while half-width `.!?;` only count when followed by whitespace, a
+  closing quote/bracket, or (for the very last character) one read past the window —
+  so an English `period + space` at the edge still lands, but a decimal point such
+  as `Version 0.1.` does not. (Before 1.8.0 this fallback spoke the first non-empty
+  line only, which sounded like the narration stopped after line 1.) The chosen
+  candidate is still cleaned and subject to the `maxChars` ceiling, falling back to
+  the message if it is itself too long.
 
 Full architecture and design rationale: [docs/DESIGN.md](docs/DESIGN.md).
 
@@ -355,6 +375,16 @@ You can tune behavior without forking, and your changes **survive `npm update`**
    ```
 
    Then point the plugin at your copy in the `config` block:
+
+   > **Windows: keep the file's UTF-8 BOM.** `speak.ps1` is a UTF-8 script and Windows
+   > PowerShell 5.1 only knows that from the 3-byte BOM (`EF BB BF`) at the start; an
+   > editor that saves it without one makes the system ANSI code page decode it instead,
+   > and Chinese text inside the script turns to mojibake — the symptom is **silence or
+   > wrong trimming, with no error**. The shipped script keeps all of its *logic* ASCII-only
+   > for that reason, so a lost BOM only garbles the Chinese comments and the default
+   > prompt. After editing, check with
+   > `Get-Content -Encoding Byte -TotalCount 3 your-speak.ps1` (expect `239 187 191`), or
+   > run `node scripts/test-engine-static.js`.
 
    ```yaml
    - insert:
@@ -377,6 +407,8 @@ You can tune behavior without forking, and your changes **survive `npm update`**
 | ------- | ----- | --- |
 | No sound at all, no error | no natural voice enabled/installed | Win11: enable a natural voice in *Settings → Narrator / Speech*; Win10: install NaturalVoiceSAPIAdapter + a voice pack. Test `speak.ps1` directly |
 | Long replies never spoken | adapter per-`Speak` character ceiling | already guarded at 300 chars — lower `-MaxChars` if needed |
+| Narration stops after the first line | with `longTextMode: heading`, text over `maxChars` and no markdown heading made the engine speak only the first non-empty line (pre-1.8.0) | fixed in 1.8.0 (speaks a coherent opening instead); to change the policy use `message` mode or raise `maxChars` |
+| `工具调用出错：Error: cannot read …` spoken | the "is this Chinese?" detail filter only checked for the presence of a CJK character, so a Chinese directory name inside an English error passed it (1.8.0 regression) | fixed in 1.8.0 — the detail now needs more Chinese characters than Latin letters |
 | Emoji-heavy text silent | SAPI fails silently on emoji | already stripped by the engine |
 | Plugin not loading | raw Windows path as plugin name | use the `file:///C:/…` URL form (installer does this) |
 | macOS: voice suddenly became "婷婷" | opening the "Spoken Content / Siri Voice" pane drifted the system voice | re-pick via Settings → Accessibility → Spoken Content → System Voice → ⓘ entry |
@@ -401,6 +433,15 @@ client/
   client.js              DSH browser bundle: turn-tail Speak/Stop button + Settings → dsh-speak settings page
 docs/
   DESIGN.md              full design rationale, pitfalls, extension guide
+scripts/                 tests + manual dev helpers (not shipped in the npm package)
+  test-engine-static.js    engine invariants: .ps1 BOM + PowerShell parse, .sh LF (also run by prepublishOnly)
+  test-engine-longtext.js  long-text guard contract for BOTH engines (speak.ps1 -DryRun / speak.sh's perl)
+  test-speech-hook.js      host plugin: event triggers, queue, tool-error detail filter
+  test-client-bundle.js    browser bundle: slot registration + component rendering
+  test-settings-integration.js  settings-service wiring + removed-API guard
+  session-log-dump.js      read a DSH session log (manual: what text reached the engine)
+  settings-ui-check.py     Playwright UI check (manual: needs a running, authenticated dsh)
+  dsh-events-check.py      Playwright disclosure check (manual)
 ```
 
 ## Writing a new adapter

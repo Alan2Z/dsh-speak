@@ -94,8 +94,13 @@ Processing pipeline (in order):
 3. **Strip emoji / non-printable** — keep CJK, CJK punctuation, full-width ranges,
    ASCII printable (regex `[^一-龥　-〿＀-￯ -⁯ -~]`).
 4. **Collapse whitespace.**
-5. **Length guard** — if cleaned text exceeds `MaxChars` (default 300), replace with
-   `LongTextMessage` (default: `本次播报内容较长，请自行阅读。`).
+5. **Length guard** — over `MaxChars` (default 300) the text is handled by
+   `LongTextMode`: `message` (the default) replaces it with `LongTextMessage`
+   (default: `本次播报内容较长，请自行阅读。`); `heading` speaks the largest
+   markdown heading, or — when the text has no heading at all — a coherent
+   opening: the leading `MaxChars` window trimmed back to its last sentence end
+   (that fallback used to speak only the first line, which sounded like the
+   narration was cut off).
 6. **Speak** — `System.Speech.Synthesis.SpeechSynthesizer`, volume/rate applied,
    best zh natural voice selected, then `Speak()`.
 
@@ -135,14 +140,20 @@ no "reply finished" hook, so the plugin observes the session event stream:
 - **Optional event announcements** (1.6.0, all off by default): `turn/end`,
   `command/done`, `goal/change`, `tool/result` (on error), and `todo/write` each
   have an independent toggle and announce a fixed phrase on fire (see §5).
-- **Settings namespace registration** (1.6.0): one timer tick after apply the
-  plugin calls `installSettingsSection(ctx, 'dsh-speak', schema, patchConfig,
-  hooks)`, resolving config as schema default → patch `config` → UI user layer.
-  `onChange` re-derives `cfg` from a saved `settingsSource()` thunk (note:
-  `installSettingsSection` only calls `setSource` on attach/detach, so changes
-  must be re-read in `onChange`). On hosts without a settings service (dsh <
-  0.1.0-rc.7 or no provider mounted) the registration is skipped silently and
-  the plugin works purely from the patch config — backward compatible.
+- **Settings namespace registration** (1.6.0): the plugin wires its namespace
+  through the settings *service* — `ctx.inject(['settings'])` →
+  `settings.register('dsh-speak', schema, { base: patchConfig })` → re-derive
+  `cfg` from `scope.get()` on every `scope.watch` notification, and restore the
+  composed patch config when the fiber unloads. Resolution stays schema default
+  → patch `config` → UI user layer.
+  The plugin never imports `@deepseek-ai/dsh-settings`: DSH 0.1.2-alpha.1 deleted
+  the `installSettingsSection` / `settingsNamespace` helpers, and referencing
+  them is fatal — a missing named export is a module-evaluation error, and the
+  old lazy call threw `settingsNamespace is not a function` inside a timer
+  callback, which crashed the host (dsh exited 1 instead of booting). The service
+  itself never changed. On hosts without a settings service the inject callback
+  never runs and the plugin works purely from the patch config — graceful
+  degradation with no version check.
 
 Registration snippet (also automated by `install.ps1`; npm installs use the bare
 package name `'dsh-speak'` — this is the file-install path):
@@ -168,7 +179,13 @@ that registers two pieces of UI:
   Clicking 🔊 POSTs to `/dsh-speak/control` to replay that final message; clicking
   again stops; clicking another switches. The button's speaking/paused state is
   derived from the authoritative host state over the `/dsh-speak/ws` WebSocket
-  (matched by session + turn identity).
+  (matched by session + turn identity). The replayed text is resolved through the
+  Chat target selector hook `useChat` (`@deepseek-ai/dsh-client-ui-chat` declares
+  it for every session-scoped slot): DSH 0.1.2 excluded Conversation target data
+  from the Session snapshot, so `useSession(s => s.chat.nodes)` no longer yields
+  the chat nodes. The two selectors return primitives only, because a fresh
+  object per read would churn the subscription, and a missing `useChat` prop
+  degrades the button to disabled instead of throwing inside its row.
 - **Settings → dsh-speak settings page** (1.7.0): registered into the
   `settings.section` slot, drawn with `@deepseek-ai/dsh-client-ui-primitives`
   (Button / DisclosureRow / Input; Toggle / Options / SettingInput helpers). Every
@@ -179,7 +196,12 @@ that registers two pieces of UI:
 
 - The package declares its browser half via `package.json`
   `dsh.client: { platform: 'web' }` + `exports['./client']`; DSH's client-modules
-  scanner picks it up and loads it automatically.
+  scanner picks it up and loads it automatically. `dsh.client.inject` names the
+  package rows that DECLARE the two slots it occupies
+  (`@deepseek-ai/dsh-client-ui-chat`, `@deepseek-ai/dsh-client-ui-settings`) so
+  their factories arrive first; `dsh.client.external` lists
+  `@deepseek-ai/dsh-client-ui-primitives`, which the shell seeds in its static
+  module table.
 - **Deliberately handwritten, zero build**: it only uses platform seed modules
   and official primitives (the bundle-purity gate allows primitives but forbids
   importing official package internals), matching the built bundles' contract.
@@ -206,7 +228,7 @@ returns immediately. (Async spawning is safe here — the nested-spawn restricti
 | `turn/end`                       | 🟡 off by default; announces "第 N 轮对话完成/中断/异常结束" |
 | `command/done`                   | 🟡 off by default; announces "命令执行完成/失败" |
 | `goal/change`                    | 🟡 off by default; announces "已创建目标/目标已完成…" (head) |
-| `tool/result`                    | 🟡 off by default; announces "工具调用出错" only when `error` or an `isError` content block is present (English details / technical codes are dropped, Chinese details kept) |
+| `tool/result`                    | 🟡 off by default; announces "工具调用出错" only for a structured failure (`error`, or a result block with `isError === true`). A non-zero shell exit is result data (`exit code: N`), not an error — pwsh/bash deliberately settle it as a completed call, so only infrastructure failures (spawn errors, aborts) and structured tool failures (e.g. fs) announce. Since 0.1.2 the `ToolResultBlock` wrapper nests the text under `content[]`, so the detail is read from there (English details / technical codes dropped, Chinese details kept) |
 | `todo/write`                     | 🟡 off by default; announces "待办已更新：n/m 完成" |
 | `assistant/message` (queueAllMessages on) | ✅ every message enqueued immediately (intermediate spoken too) |
 | manual replay (per-message 🔊)   | ✅ clear queue → stop current → speak that turn |
@@ -223,7 +245,8 @@ returns immediately. (Async spawning is safe here — the nested-spawn restricti
 | `-Rate`           | `1`                         | speech rate (SAPI scale)                 |
 | `-MaxChars`       | platform                    | beyond this, replaced by `LongTextMessage` (macOS default 0 = unlimited) |
 | `-LongTextMessage`| `本次播报内容较长，请自行阅读。` | spoken instead of over-long text         |
-| `-LongTextMode`   | `message`                    | `message` (fixed prompt) \| `heading` (speak the largest markdown heading) |
+| `-LongTextMode`   | `message`                    | `message` (fixed prompt) \| `heading` (speak the largest markdown heading; **with no heading, speak a coherent opening**: the leading `MaxChars` window trimmed back to its last sentence end, kept whole when that would drop more than half the window. Full-width `。！？；…` always end a sentence; half-width `.!?;` only when followed by whitespace/a closing quote or bracket — read one character PAST the window for the last position, so an English `period + space` at the edge counts while `Version 0.1.` does not) |
+| `-DryRun`         | `0`                          | print the text that WOULD be spoken as UTF-8 on stdout and exit without audio (maintainer aid for diffing the cleaning pipeline and the long-text guard) |
 | `-CleanMarkdownFormatting` | `true`               | convert Markdown to natural speech (link labels kept, URLs stripped) |
 | `-ReadInlineCode` | `true`                       | read inline code without backtick markers |
 | `-CodeBlocks`     | `smart`                      | `all` \| `smart` \| `replace` (fenced code blocks) |
@@ -281,6 +304,7 @@ Full configuration guide: the README's Configuration section.
 | 6.6 | Reading/writing speech text as ANSI | mojibake or empty speech | always UTF-8 (`[System.IO.File]::ReadAllText(..., UTF8)`) |
 | 6.7 | A repo `.sh` checked out as CRLF by `core.autocrlf=true`; `npm pack` bundles the **working-tree** file | the published `speak.sh` dies in bash on macOS (`command not found`, `syntax error near {`), silent failure | `.gitattributes` pins `*.sh text eol=lf` (check `file engine/speak.sh` for CRLF before publishing) |
 | 6.8 | Log path hard-coded as `/tmp` | on macOS `os.tmpdir()` is `/var/folders/.../T`, the log is not at `/tmp` | look for the log at `os.tmpdir()` (= `$TMPDIR`) |
+| 6.9 | Engine `.ps1` saved **without the UTF-8 BOM** (any editor or script that rewrites the file drops it — it is byte metadata, not content, and nothing in the file records the requirement) | Windows PowerShell 5.1 decodes the file with the system ANSI code page, so Chinese **literals in code** become mojibake: the emoji/CJK filter then drops real text (silent no audio) or the sentence-end classes stop matching (silent wrong trimming). Comments only look garbled | two rules: (a) the engine's CODE stays ASCII-only — PowerShell punctuation is built from `[char]` code points and ranges are written as `\u` escapes, and `speak.sh`'s Perl guard writes punctuation as `\x{...}` escapes (Perl source is bytes without `use utf8`, so a Chinese literal in a pattern is read as Latin-1 and matches nothing — a macOS-only "trims nothing" bug 1.8.0 shipped and `npm test` caught it on a real machine) — so a lost BOM only garbles comments and the two default prompts; (b) `scripts/test-engine-static.js` asserts the BOM on every `engine/*.ps1` plus a PowerShell parse check (also in `prepublishOnly`), and `scripts/test-engine-longtext.js` asserts the extracted Perl guard is ASCII-only |
 
 ## 7. Extending
 

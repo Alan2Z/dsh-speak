@@ -55,15 +55,45 @@ fi
 # `heading` is meaningful only when a positive long-text ceiling is configured.
 # -F (full read, manual replay) skips this guard entirely.
 if [ "$FULL_READ" != "1" ] && [ "$MAX_CHARS" -gt 0 ] && [ "${#TEXT}" -gt "$MAX_CHARS" ] && [ "$LONG_MODE" = "heading" ]; then
+  export DSH_SPEAK_MAX_CHARS="$MAX_CHARS"
   TEXT=$(printf '%s' "$TEXT" | /usr/bin/perl -CSD -e '
-    my $best = 7; my $cand = ""; my $first = ""; my $inCode = 0;
-    while (<STDIN>) {
-      if (/^\s*```/) { $inCode = !$inCode; next; }   # 跳过代码块内的 "# 注释"
+    my $text = do { local $/; <STDIN> };
+    my $best = 7; my $cand = ""; my $inCode = 0;
+    for my $line (split /\n/, $text, -1) {
+      $line =~ s/\r$//;
+      if ($line =~ /^\s*```/) { $inCode = !$inCode; next; }   # 跳过代码块内的 "# 注释"
       next if $inCode;
-      if (/^[ \t]*(\#{1,6})[ \t]+(.*)$/) { my $n = length($1); if ($n < $best) { $best = $n; $cand = $2; } }
-      elsif ($first eq "" && /\S/) { $first = $_; }
+      if ($line =~ /^[ \t]*(\#{1,6})[ \t]+(.*)$/) { my $n = length($1); if ($n < $best) { $best = $n; $cand = $2; } }
     }
-    print($cand eq "" ? $first : $cand);
+    if ($cand ne "") { print $cand; exit }
+    # 没有标题：**不能只念第一个非空行**（会念出"……写明："这种断头句然后静默
+    # 停住，听感上就是"从第二行开始不念了"）。改为取开头 MaxChars 窗口，并在窗口
+    # 内最后一个句末标点处收尾。中英双语判据与 speak.ps1 保持一致：
+    #   * 全角 。！？；… 无条件算句末；
+    #   * 半角 .!?; 只在后面跟空白、右引号/右括号时才算，否则
+    #     "0.1.2"、"file.txt"、"e.g." 里的小数点/扩展名会被当成句末；
+    #   * 半角标点不认"到窗口结尾"本身就结束：窗口末尾若是小数点，认了等于没修剪。
+    #     但会多读一位来判断，所以"句号+空格"在窗口边缘照样成立。
+    # 收尾后若不足半个窗口，就保留整个窗口，避免一整句超长文本被砍成一个词。
+    #
+    # 标点一律写成 \x{...} 码位转义，让这段 Perl 源码保持**纯 ASCII**：Perl 源码默认
+    # 按字节处理（这里没有 use utf8），直接写中文标点会被当成 Latin-1 单字节字符，
+    # 模式就再也匹配不到解码后的正文，表现为**完全不修剪**（1.8.0 实测踩到）。
+    # 码位与 speak.ps1 里 [char] 构造的集合一一对应：
+    #   。 ！ ？ ； …   = \x{3002} \x{FF01} \x{FF1F} \x{FF1B} \x{2026}
+    #   ） 】 」 』 = \x{FF09} \x{3011} \x{300D} \x{300F}
+    #   " ” ’ ) ] }    = " \x{201D} \x{2019} ) ] }
+    my $max = $ENV{DSH_SPEAK_MAX_CHARS} || 300;
+    my $window = length($text) > $max ? substr($text, 0, $max) : $text;
+    my $scan = length($text) > $max + 1 ? substr($text, 0, $max + 1) : $text;
+    my @ends;
+    while ($scan =~ /(?:[\x{3002}\x{FF01}\x{FF1F}\x{FF1B}\x{2026}]|[.!?;](?=[\s"\x{201D}\x{2019}\)\]\}\x{FF09}\x{3011}\x{300D}\x{300F}]))/g) { push @ends, pos($scan); }
+    # 只认落在窗口内的最后一个句末标点：多读的那一位可能让最后一个匹配落在窗口
+    # 之外，那种匹配要忽略，但不能因此丢掉窗口内更早的合法边界。
+    my $cut = 0;
+    foreach my $end (@ends) { $cut = $end if $end <= length($window); }
+    $window = substr($window, 0, $cut) if $cut >= int(length($window) / 2);
+    print $window;
   ')
 fi
 

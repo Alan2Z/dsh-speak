@@ -5,6 +5,8 @@
 #
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File speech-prompt.ps1 -Text "请做出选择"
 
+# 唯一的非 ASCII 代码字面量：丢 UTF-8 BOM 时 PowerShell 5.1 会按 ANSI 代码页把它
+# 解码成乱码——调用方通常显式传 -Text，所以只影响不带参数的调用。
 param([string]$Text = '请做出选择')
 
 if (-not $Text) { exit 0 }
