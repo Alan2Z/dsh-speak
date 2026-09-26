@@ -2,20 +2,20 @@
 // ==============================================================================
 // Evaluates client/client.js exactly as DSH's client module system does
 // (window.__ModuleLoader__.load → factory(require) → apply(ctx)), then renders
-// both registered components against the DSH 0.1.5 slot contract to verify:
+// both registered components against the DSH 0.1.7 slot contract to verify:
 //
 //   * the bundle registers under the id DSH's boot graph row expects
 //   * apply() registers the per-message Speak action
 //     (conversation.chat.assistant-actions) and the Settings → dsh-speak page
-//     (settings.section)
+//     (settings.section, registered through configForms.whileServed)
 //   * the Speak action resolves the clicked message through the Chat target
 //     selector hook `useChat` — NOT through `useSession`, whose SessionSnapshot
 //     stopped carrying Conversation target data in DSH 0.1.2
 //   * clicking posts the exact /dsh-speak/control payload (play/stop)
 //   * the button degrades to disabled (never throws) when the message is
 //     unknown or the framework supplies no Chat target hook
-//   * the settings page binds settingsScope to the dsh-speak namespace and
-//     writes through scope.set(field, value)
+//   * the settings page binds the configForms entry the host serves and writes
+//     through form.set(field, value)
 //
 // No build step and no external test runner: plain Node + a hand-written React
 // hook stub (the plugin only uses createElement/useState/useEffect).
@@ -68,7 +68,8 @@ const React = {
 const primitives = {
   Button: props => ({ type: 'Button', props }),
   DisclosureRow: props => ({ type: 'DisclosureRow', props }),
-  IconPauseOutline16: () => null,
+  // DSH 0.1.7 renamed the fixed-size icon exports: <Name>16 → <Name>Regular.
+  IconPauseOutlineRegular: () => null,
   Input: props => ({ type: 'Input', props }),
 }
 
@@ -99,7 +100,8 @@ function expand(node) {
 // ---------------------------------------------------------------------------
 // Client service stubs
 // ---------------------------------------------------------------------------
-function makeHarness() {
+/** @param served settings namespaces the Host serves (the page binds the first match). */
+function makeHarness(served = ['dsh-speak']) {
   const registrations = []
   const settingsWrites = []
   const controlRequests = []
@@ -138,16 +140,28 @@ function makeHarness() {
     user: { announceTurnEnd: true },
     revision: 1, writable: true, mode: 'host',
   }
+  // DSH >= 0.1.7 settings surface: one shared describe mirror, `get(entryId)`
+  // forms over it, and `whileServed` as the "register only while the Host
+  // serves this namespace" watch the page rides.
   const settingsBindings = []
-  const settingsScope = {
-    bind(spec) {
-      settingsBindings.push(spec.namespace)
+  const configForms = {
+    get(entryId) {
+      settingsBindings.push(entryId)
       return {
         getSnapshot: () => scopeSnapshot,
         subscribe: () => () => {},
-        set: async (field, value) => { settingsWrites.push({ field, value }); scopeSnapshot.value[field] = value },
-        unset: async field => { settingsWrites.push({ field, unset: true }) },
+        // The real ConfigForm.set resolves to the Host's answer (true = accepted);
+        // the card warns on false, so the stub must answer like the framework.
+        set: async (field, value) => { settingsWrites.push({ field, value }); scopeSnapshot.value[field] = value; return true },
+        unset: async field => { settingsWrites.push({ field, unset: true }); return true },
       }
+    },
+    describe() { return { getSnapshot: () => ({ view: { namespaces: served.map(ns => ({ ns })) } }), subscribe: () => () => {}, ensure: () => Promise.resolve() } },
+    whileServed(namespaces, register) {
+      const available = new Set(namespaces.filter(name => served.includes(name)))
+      if (available.size === 0) return () => {}
+      const off = register(available)
+      return () => { if (typeof off === 'function') off() }
     },
   }
 
@@ -168,7 +182,7 @@ function makeHarness() {
     timer: { timeout() { return () => {} } },
     timeout() { return () => {} },
     slots,
-    settingsScope,
+    configForms,
     locale,
   }
 
@@ -202,7 +216,7 @@ function makeHarness() {
 }
 
 // ---------------------------------------------------------------------------
-// Chat target fixture shaped like DSH 0.1.5's ChatSnapshot
+// Chat target fixture shaped like DSH 0.1.7's ChatSnapshot
 // (nodes = ChatNodeStore with values(); the finalized assistant content lives in
 // data.finalNode for an assistant node and data.closing.finalNode for a
 // turn-tail node).
@@ -237,12 +251,14 @@ const mod = loaded.factory(harness.sandbox.require)
 assert.strictEqual(typeof mod.apply, 'function', 'factory must export apply')
 assert.ok(Array.isArray(mod.inject), 'factory must export inject array')
 console.log('exports.inject =', JSON.stringify(mod.inject))
-// Every declared service must exist in DSH 0.1.5's client tree; a missing one
-// parks the fiber in `pending` and fails the whole page boot.
-for (const service of ['slots', 'timer', 'settingsScope', 'locale']) {
+// Every declared service must exist in DSH 0.1.7's client tree; a missing one
+// parks the fiber in `pending` and fails the whole page boot (which is exactly
+// how 0.1.7 broke this plugin: `settingsScope` was replaced by `configForms`).
+for (const service of ['slots', 'timer', 'configForms', 'locale']) {
   assert.ok(mod.inject.includes(service), `inject must declare ${service}`)
   assert.ok(service in harness.ctx, `client ctx must provide ${service}`)
 }
+assert.ok(!mod.inject.includes('settingsScope'), 'settingsScope no longer exists in DSH >= 0.1.7')
 assert.strictEqual(harness.sockets.length, 0, 'sockets only open inside apply()')
 
 mod.apply(harness.ctx)
@@ -259,8 +275,26 @@ const settingsEntry = harness.registrations.find(entry => entry.options && entry
 assert.ok(settingsEntry, 'must register the Settings → dsh-speak settings page')
 assert.strictEqual(settingsEntry.injected, 'settings.section', 'must inject the slot before registering')
 assert.strictEqual(typeof settingsEntry.options.label, 'function', 'settings nav label is a localized thunk')
-assert.deepStrictEqual(harness.settingsBindings, [NS], 'settingsScope bound to the dsh-speak namespace')
+assert.deepStrictEqual(harness.settingsBindings, [NS], 'configForms form bound to the served dsh-speak entry')
 console.log('Settings → dsh-speak settings page registered (settings.section) ✓')
+
+// The page follows the Host: an upgraded profile whose row still carries the
+// pre-1.8.2 entry id binds that namespace instead, and a deployment that serves
+// neither shows no page at all.
+function pageFor(served) {
+  const probe = makeHarness(served)
+  probe.sandbox.loaded.factory(probe.sandbox.require).apply(probe.ctx)
+  return probe
+}
+const legacy = pageFor(['speech-hook'])
+assert.deepStrictEqual(legacy.settingsBindings, ['speech-hook'], 'the legacy speech-hook entry id still binds')
+assert.ok(legacy.registrations.some(entry => entry.options && entry.options.name === 'settings.section'),
+  'the settings page still registers under the legacy entry id')
+const unserved = pageFor(['something-else'])
+assert.deepStrictEqual(unserved.settingsBindings, [], 'an unknown namespace binds no form')
+assert.ok(!unserved.registrations.some(entry => entry.options && entry.options.name === 'settings.section'),
+  'no namespace served → no dead settings page')
+console.log('Settings page follows the Host-served entry id ✓')
 
 /** Render one component with a fresh hook cursor, expanding nested components. */
 function render(component, props) { resetHooks(); return expand(component(props)) }
@@ -313,10 +347,10 @@ const toggle = findOne(settingsTree, 'Button')
 assert.ok(toggle, 'settings page renders its controls')
 assert.strictEqual(toggle.props.children, '开', 'boolean settings render as localized On/Off')
 toggle.props.onClick()
-assert.deepStrictEqual(harness.settingsWrites[0], { field: 'enabled', value: false }, 'the master switch writes through settingsScope.set')
+assert.deepStrictEqual(harness.settingsWrites[0], { field: 'enabled', value: false }, 'the master switch writes through the configForms form')
 const numericInput = findOne(settingsTree, 'Input')
 assert.ok(numericInput, 'numeric settings render a text input')
 assert.strictEqual(typeof numericInput.props.onChange, 'function', 'inputs accept change handling')
-console.log('Settings page renders and writes through settingsScope ✓')
+console.log('Settings page renders and writes through configForms ✓')
 
 console.log('ALL PASS ✓')

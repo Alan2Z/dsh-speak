@@ -93,19 +93,28 @@ macOS:
 
 DSH web app:
 
-- Tested against **DSH 0.1.5-rc.1**. Two host/client APIs changed after 0.1.1, both
-  handled here (1.8.0):
-  - `@deepseek-ai/dsh-settings` deleted the `installSettingsSection` /
-    `settingsNamespace` helpers — the plugin now registers its namespace through
-    the `settings` **service**. On those older releases the plugin aborted the
-    host boot (`settingsNamespace is not a function`); a missing settings provider
-    now just leaves the composed patch `config` in force.
-  - the Session snapshot stopped carrying Conversation target data — the 🔊 button
-    resolves the clicked message through the Chat target hook `useChat`.
+- Tested against **DSH 0.1.7-rc.2**. Host/client APIs changed twice since 0.1.1,
+  both handled here:
+  - **0.1.7 replaced the settings provider API with Config projection**: the
+    settings service now reads each active Loader entry's own exported `Config`
+    schema and projects its *volatile* fields into the settings UI
+    (`ctx.settings.describe()` on the host, `ctx.configForms` in the browser).
+    `settings.register(namespace, schema, { base })` — the 1.6.0–1.8.x wiring —
+    is gone, and the browser service `settingsScope` was replaced by
+    `configForms`. This plugin therefore exports its schema as `Config` and the
+    settings namespace is its **entry id** (`dsh-speak`; a leftover
+    `speech-hook` row from 1.8.x is still bound, see below).
+  - **0.1.2** stopped putting Conversation target data into the Session snapshot
+    (the 🔊 button resolves the clicked message through the Chat target hook
+    `useChat`), and deleted `@deepseek-ai/dsh-settings`'s `installSettingsSection`
+    / `settingsNamespace` helpers.
 - The host floor lives where dsh-market reads it: `engines.dsh` in `package.json`
-  (`>=0.1.5-rc.1`). The catalog card and its "compatible with current DSH" filter
+  (`>=0.1.7-rc.2`). The catalog card and its "compatible with current DSH" filter
   read exactly that field, so the floor moves only after a release has been
   verified against the new host.
+- 1.8.2 requires the settings model introduced in 0.1.7: on an older host the
+  browser half would wait forever for the `configForms` service. Use 1.8.1 for
+  DSH ≤ 0.1.6.
 
 ## Install & quick start
 
@@ -113,17 +122,34 @@ DSH web app:
 
 ```powershell
 # 1. install the plugin into your web profile (adds dsh-speak to
-#    ~/.dsh/profiles/web/package.json dependencies)
+#    ~/.dsh/profiles/web/package.json dependencies AND to dsh.profile.bundles)
 dsh plugin --profile web add dsh-speak
 
-# 2. register it in ~/.dsh/profiles/web/cordis.patch.yml
-#    (for npm packages the bare package name is used — no file:/// URL needed):
-#    - insert:
-#        - id: speech-hook
-#          name: 'dsh-speak'
+# 2. that is all — the package ships its own bundle patch, which registers the
+#    `dsh-speak` entry. Do NOT also hand-write an `insert:` row for it:
+#    registering the same entry twice makes the id non-unique, and DSH's config
+#    editor then rejects every settings write with
+#    `settings/rejected: Configuration for "dsh-speak" is overridden by a home
+#    patch or command-line overlay` (speech keeps working, the settings page
+#    silently bounces).
+#
+#    To pin options in YAML anyway, add ONLY this top-level row (the settings page
+#    edits it in place; `config` on a top-level row is the shape the editor
+#    supports — see "DSH plugin config"):
+#    - id: dsh-speak
+#      name: 'dsh-speak'
+#      config: {}
+#
+#    The entry id IS the settings namespace on DSH >= 0.1.7: your options are
+#    stored under that key in this same file. A row left over from 1.8.x
+#    (id: speech-hook) keeps working — the browser half binds either id.
 
 # 3. restart the DSH web app — replies are now announced automatically
 ```
+
+> Installing from the in-app marketplace is the same path: it adds the package to
+> `dsh.profile.bundles`. Only the manual installs below need hand-written rows.
+> **One registration path per profile** — never both.
 
 > **No pnpm?** `dsh plugin` forwards to pnpm, which is not installed on every
 > machine. The exact same install can be done with npm directly:
@@ -137,6 +163,10 @@ dsh plugin --profile web add dsh-speak
 > ```bash
 > npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
 > ```
+>
+> An `npm install` alone does **not** register the plugin: add either the bundle
+> name to `~/.dsh/profiles/web/package.json` → `dsh.profile.bundles`, or the two
+> rows from the file-install section — not both.
 
 The engine ships inside the package (`node_modules/dsh-speak/engine/`), so no extra
 copying is needed.
@@ -182,8 +212,11 @@ npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
 
 # 2. register in ~/.dsh/profiles/web/cordis.patch.yml (bare package name — no file:/// URL):
 #    - insert:
-#        - id: speech-hook
+#        - id: dsh-speak
 #          name: 'dsh-speak'
+#    - id: dsh-speak
+#      name: 'dsh-speak'
+#      config: {}
 
 # 3. no restart needed — the patch watcher hot-reloads; replies are announced
 #    after the throttle (~1.5 s); tool-calling replies are announced at turn end
@@ -267,8 +300,8 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
 
 ### DSH plugin config
 
-**Either way works, and they stay in sync** (both write the same settings
-document):
+**Either way works, and they stay in sync** (both write the same profile patch
+document — the settings service persists UI edits into the row it read them from):
 
 1. **Web UI (1.7.0, recommended)**: a dedicated Settings → dsh-speak settings
    page. Every option is editable and saved there (visible in `dsh --dump-config`,
@@ -277,41 +310,71 @@ document):
 
 ```yaml
 # ~/.dsh/profiles/web/cordis.patch.yml
+# TWO rows, and the shape matters: `insert` provides the entry, the TOP-LEVEL row
+# carries the config the settings page edits. DSH's config editor rewrites a
+# config in place only on a top-level row; a config nested inside the insert row
+# (what 1.8.x profiles and the 1.8.2 notes first showed) makes the UI accept an
+# edit, apply it live, and then silently roll it back on disk — the value reverts
+# on the next boot.
 - insert:
-    - id: speech-hook
+    - id: dsh-speak           # the entry id IS the settings namespace (0.1.7+)
       name: 'dsh-speak'
-      config:
-        enabled: true           # master switch: false silences everything
-        automaticSpeech: true   # auto-speak final replies
-        queueAllMessages: false # true = enqueue every assistant message as it arrives
-        replayFullRead: false   # true = manual replay skips the long-text truncation, reads everything
-        cleanMarkdownFormatting: true # convert Markdown to natural speech
-        readInlineCode: true    # read inline code without backticks
-        codeBlocks: smart       # all | smart | replace (fenced code blocks)
-        codeBlockMaxChars: 300  # smart-mode code block character limit
-        codeBlockReplacementText: 'You can see the code in our history.' # replace-mode text
-        throttleMs: 1500        # merge delay before announcing (ms)
-        engine: ''              # engine path override; '' = auto-resolve
-        announceApprovals: true # speak approval requests
-        announceQuestions: true # speak ask_user_question content
-        stripApprovalPrefix: true  # strip "escalate sandbox to ...: " prefix
-        questionGapMs: 2000      # pause between multiple question announcements (ms)
-        longTextMode: message   # message | heading (speak largest md heading)
-        longTextMessage: '本次播报内容较长，请自行阅读。' # fixed prompt for message mode
-        maxChars: 300           # per-utterance ceiling (macOS default 0 = unlimited)
-        volume: 50              # Windows only
-        rate: 0                 # 0 = engine default (Windows SAPI scale / macOS wpm)
-        # —— optional event announcements (1.6.0, all off by default) ——
-        announceTurnEnd: false     # turn/end — "第 N 轮对话完成"
-        announceCommandDone: false # command/done — command finished/failed
-        announceGoalChange: false  # goal/change — goal created/updated/completed
-        announceToolErrors: false  # tool/result error — announce (english dropped)
-        announceTodoWrite: false   # todo/write — todo list updated
+- id: dsh-speak
+  name: 'dsh-speak'
+  config:
+    enabled: true           # master switch: false silences everything
+    automaticSpeech: true   # auto-speak final replies
+    queueAllMessages: false # true = enqueue every assistant message as it arrives
+    replayFullRead: false   # true = manual replay skips the long-text truncation, reads everything
+    cleanMarkdownFormatting: true # convert Markdown to natural speech
+    readInlineCode: true    # read inline code without backticks
+    codeBlocks: smart       # all | smart | replace (fenced code blocks)
+    codeBlockMaxChars: 300  # smart-mode code block character limit
+    codeBlockReplacementText: 'You can see the code in our history.' # replace-mode text
+    throttleMs: 1500        # merge delay before announcing (ms)
+    engine: ''              # engine path override; '' = auto-resolve
+    announceApprovals: true # speak approval requests
+    announceQuestions: true # speak ask_user_question content
+    stripApprovalPrefix: true  # strip "escalate sandbox to ...: " prefix
+    questionGapMs: 2000      # pause between multiple question announcements (ms)
+    longTextMode: message   # message | heading (speak largest md heading)
+    longTextMessage: '本次播报内容较长，请自行阅读。' # fixed prompt for message mode
+    maxChars: 300           # per-utterance ceiling (macOS default 0 = unlimited)
+    volume: 50              # Windows only
+    rate: 0                 # 0 = engine default (Windows SAPI scale / macOS wpm)
+    # —— optional event announcements (1.6.0, all off by default) ——
+    announceTurnEnd: false     # turn/end — "第 N 轮对话完成"
+    announceCommandDone: false # command/done — command finished/failed
+    announceGoalChange: false  # goal/change — goal created/updated/completed
+    announceToolErrors: false  # tool/result error — announce (english dropped)
+    announceTodoWrite: false   # todo/write — todo list updated
 ```
 
 > Resolution order: schema default → patch `config` → UI user settings. Fields
 > written in YAML show up in the UI too. Platform note: `maxChars` defaults to
 > 0 on macOS (`say` has no ceiling) and 300 on Windows (SAPI safe limit).
+>
+> Values outside the ranges in the table (`volume` 0-100, Windows `rate` -10..10)
+> are clamped before they reach the engine — SAPI throws on an out-of-range
+> `Volume`/`Rate`, which surfaces as silence and nothing else. A clamped value is
+> logged as `settings 值超出范围，已钳制: <field> <given> -> <used>`. An explicit
+> `0` is always honored (`volume: 0` silences, `maxChars: 0` means unlimited,
+> `throttleMs: 0` announces without merging).
+
+> **Keep the config on the top-level row.** It is not a style preference: with the
+> `config:` block nested inside the `insert` row, the settings page still renders
+> and the running plugin still obeys an edit, but DSH's config editor cannot rewrite
+> that row — it appends a new top-level row and then rolls the write back, so the
+> value silently reverts the next time dsh starts. Check with
+> `python scripts/settings-ui-check.py`, which asserts the write lands in the patch.
+
+> **Upgrading from 1.8.x:** edit the options through the settings page, or move
+> your old `config:` block onto the new top-level row (see the shape above). Before
+> 0.1.7 the options lived in a `dsh-speak:` section of `~/.dsh/settings.yaml`; that
+> file was migrated to `settings.yaml.imported` by DSH, and a section whose name
+> matched no Loader entry (1.8.x registered the namespace in code, so `dsh-speak:`
+> matched nothing) was left behind. If you had custom values, copy them into that
+> `config:` block — the entry id (`dsh-speak`) is now the key DSH looks for.
 
 #### Option reference
 
@@ -391,11 +454,11 @@ You can tune behavior without forking, and your changes **survive `npm update`**
    > run `node scripts/test-engine-static.js`.
 
    ```yaml
-   - insert:
-       - id: speech-hook
-         name: 'dsh-speak'
-         config:
-           engine: 'C:/Users/<you>/.dsh/hooks/my-speak.ps1'   # or ~/.dsh/hooks/my-speak.sh on macOS
+   # edit the top-level row (NOT the insert row — see "DSH plugin config")
+   - id: dsh-speak
+     name: 'dsh-speak'
+     config:
+       engine: 'C:/Users/<you>/.dsh/hooks/my-speak.ps1'   # or ~/.dsh/hooks/my-speak.sh on macOS
    ```
 
    The plugin resolves the engine as `config.engine` → package engine → `~/.dsh/hooks/`,
@@ -415,6 +478,10 @@ You can tune behavior without forking, and your changes **survive `npm update`**
 | `工具调用出错：Error: cannot read …` spoken | the "is this Chinese?" detail filter only checked for the presence of a CJK character, so a Chinese directory name inside an English error passed it (1.8.0 regression) | fixed in 1.8.0 — the detail now needs more Chinese characters than Latin letters |
 | Emoji-heavy text silent | SAPI fails silently on emoji | already stripped by the engine |
 | Plugin not loading | raw Windows path as plugin name | use the `file:///C:/…` URL form (installer does this) |
+| Settings page missing after upgrade to 1.8.2 | profile patch row `disabled: true`, or the entry id is neither `dsh-speak` nor the legacy `speech-hook` | enable the row and use one of those two ids as its `id` |
+| Settings page renders but every change bounces back | DSH < 0.1.7 (the `configForms` service replaced `settingsScope`) | update DSH, or stay on dsh-speak 1.8.1 |
+| Every change bounces back on DSH 0.1.7+, and the plugin log says `已有实例在运行` | the entry is registered **twice** — e.g. the package is in `dsh.profile.bundles` *and* a hand-written `insert:` row exists. The id stops being unique, and the config editor rejects each write (`settings/rejected: Configuration for "dsh-speak" is overridden by a home patch or command-line overlay`); speech keeps working, which is what makes it confusing | keep exactly one registration path (see Option A), then restart |
+| A setting applies immediately but is back to the old value after a restart | the `config:` block sits INSIDE the profile patch's `insert:` row — DSH's config editor rewrites config in place only on a top-level row, and silently rolls the nested write back (it still answers `ok: true`) | split it into the two-row shape from [DSH plugin config](#dsh-plugin-config); `python scripts/settings-ui-check.py` asserts the write lands |
 | macOS: voice suddenly became "婷婷" | opening the "Spoken Content / Siri Voice" pane drifted the system voice | re-pick via Settings → Accessibility → Spoken Content → System Voice → ⓘ entry |
 | macOS: no log at `/tmp` | `os.tmpdir()` is `/var/folders/.../T`, not `/tmp` | log is at `$TMPDIR/dsh-speech-hook.log` |
 
@@ -429,7 +496,7 @@ engine/                  harness-agnostic speech engine (PowerShell + SAPI5 / ba
   speech-summary.ps1     blocking reply-summary announcement
 adapters/
   dsh/                   DSH web plugin + one-command installer
-    speech-hook.js       session-event trigger (throttle/cancel + optional events + FIFO speech queue + WebSocket + settings registration)
+    speech-hook.js       session-event trigger (throttle/cancel + optional events + FIFO speech queue + WebSocket + Config-projected settings form)
     install.ps1          copies + registers + backs up
   claude-code/
     stop-hook.ps1        Claude Code Stop hook trigger
@@ -442,7 +509,7 @@ scripts/                 tests + manual dev helpers (not shipped in the npm pack
   test-engine-longtext.js  long-text guard contract for BOTH engines (speak.ps1 -DryRun / speak.sh's perl)
   test-speech-hook.js      host plugin: event triggers, queue, tool-error detail filter
   test-client-bundle.js    browser bundle: slot registration + component rendering
-  test-settings-integration.js  settings-service wiring + removed-API guard
+  test-settings-integration.js  Config-projection wiring (volatile refs + live writes) + removed-API guard
   session-log-dump.js      read a DSH session log (manual: what text reached the engine)
   settings-ui-check.py     Playwright UI check (manual: needs a running, authenticated dsh)
   dsh-events-check.py      Playwright disclosure check (manual)

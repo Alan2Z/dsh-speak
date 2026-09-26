@@ -54,12 +54,27 @@ for (const name of files) {
 }
 
 // ---------------------------------------------------------------------------
-// PowerShell parse check — every engine .ps1 must parse cleanly.
+// The installer is the other .ps1 this package RUNS (`powershell.exe -File`), and it
+// prints a Chinese sample command — so it is held to the same BOM rule as the engine.
+// 1.8.2 lost it to a bulk text rewrite (every tool that rewrites a file drops the
+// BOM), which is exactly why this lives in a test rather than in a review checklist.
+// ---------------------------------------------------------------------------
+const installer = path.join(__dirname, '..', 'adapters', 'dsh', 'install.ps1')
+const installerBytes = fs.readFileSync(installer)
+assert.ok(installerBytes.subarray(0, 3).equals(BOM),
+  'adapters/dsh/install.ps1: missing UTF-8 BOM — Windows PowerShell 5.1 would print its Chinese sample with the ANSI code page. ' +
+  'Restore it with: [System.IO.File]::WriteAllText($f, [System.IO.File]::ReadAllText($f, [Text.Encoding]::UTF8), (New-Object Text.UTF8Encoding($true)))')
+console.log('install.ps1: UTF-8 BOM present ✓')
+
+// ---------------------------------------------------------------------------
+// PowerShell parse check — every engine .ps1 (and the installer) must parse cleanly.
 // ---------------------------------------------------------------------------
 const PARSE_COMMAND = [
   '$failed = $false',
   '$tokens = $null',
-  'foreach ($f in Get-ChildItem -LiteralPath $env:DSH_ENGINE_DIR -Filter *.ps1) {',
+  '$files = @(Get-ChildItem -LiteralPath $env:DSH_ENGINE_DIR -Filter *.ps1)',
+  'if ($env:DSH_INSTALL_PS1) { $files += Get-Item -LiteralPath $env:DSH_INSTALL_PS1 }',
+  'foreach ($f in $files) {',
   '  $errors = $null',
   '  [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errors) | Out-Null',
   '  foreach ($e in $errors) { $failed = $true; Write-Output ("PARSE ERROR " + $f.Name + ": " + $e.Message) }',
@@ -78,13 +93,13 @@ function probePowerShell() {
 const powershell = probePowerShell()
 if (powershell.ok) {
   const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', PARSE_COMMAND], {
-    env: { ...process.env, DSH_ENGINE_DIR: engineDir },
+    env: { ...process.env, DSH_ENGINE_DIR: engineDir, DSH_INSTALL_PS1: installer },
     encoding: 'utf8',
   })
   const output = (result.stdout || '').trim()
   assert.ok(result.status === 0 && !/PARSE ERROR/.test(output),
     `engine/ has a PowerShell syntax error (invisible to node --check):\n${output || result.stderr}`)
-  console.log('engine/*.ps1: parse clean ✓')
+  console.log('engine/*.ps1 + install.ps1: parse clean ✓')
 } else {
   console.log(`engine/*.ps1: parse check SKIPPED (${powershell.why}) — run this from a normal terminal`)
 }

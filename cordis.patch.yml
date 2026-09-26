@@ -1,5 +1,29 @@
 # dsh-speak bundle patch: auto-register the speech-hook plugin when this package
 # is used as a DSH bundle (declared in dsh.profile.bundles).
+#
+# The entry `id` is not decoration: since DSH 0.1.7 the settings service projects
+# each Loader entry's own exported `Config` into the settings UI, so the entry id
+# IS the settings namespace (the key under which this plugin's options are stored
+# in the profile patch, and what the browser half binds). `dsh-speak` is the id
+# this package documents; rows left over from 1.8.x name the same entry
+# `speech-hook`, and the browser half accepts either id, so an existing profile
+# needs no edit.
+#
+# The TWO rows below are deliberate, and the shape matters:
+#   * `insert` provides the entry (nothing else in a composition does),
+#   * the top-level row carries the editable `config`.
+# DSH's config editor rewrites a `config` in place only on a TOP-LEVEL row
+# (`config-editor.edit()` looks for a non-insert row with the same id+name and
+# `setIn`s its config there; its `inherited()` helper strips `config` from exactly
+# those rows). A `config` nested INSIDE the `insert` row — the shape 1.8.x used and
+# the obvious-looking one — is not addressable that way: the editor appends a new
+# top-level row and then rolls that write back, so the settings page answers
+# `ok: true`, the running plugin obeys the change immediately, and the value
+# silently reverts at the next boot. Shipping the top-level row makes settings
+# persist from the first write (verified: UI edit → profile patch in ~0.3 s).
 - insert:
-    - id: speech-hook
+    - id: dsh-speak
       name: dsh-speak
+- id: dsh-speak
+  name: dsh-speak
+  config: {}

@@ -37,11 +37,28 @@ Copy-Item -Force (Join-Path $here 'speech-hook.js') $PluginsDir
 $pluginUrl = 'file:///' + ((Join-Path $PluginsDir 'speech-hook.js') -replace '\\', '/' -replace ' ', '%20')
 
 # ---------- 3. register in cordis.patch.yml ----------
+# The entry id doubles as the settings namespace on DSH >= 0.1.7 (the settings
+# service projects each entry's own Config), so the installer uses the id this
+# package documents: dsh-speak. A profile still carrying the pre-1.8.2 row
+# (id: speech-hook) is left alone — the browser half binds either id — so a
+# re-run never registers the plugin twice.
+#
+# Two rows, deliberately: `insert` provides the entry, and the TOP-LEVEL row is the
+# one the settings page persists into. DSH's config editor rewrites a `config` in
+# place only on a top-level row; a `config` nested inside the insert is accepted by
+# the UI, applied to the running plugin, and then silently rolled back on disk.
 Write-Host "==> Registering plugin in cordis.patch.yml"
 if (Test-Path $cordisPatch) {
     $existing = Get-Content $cordisPatch -Raw -Encoding UTF8
-    if ($existing -match '(?m)^\s*- id:\s*speech-hook\b') {
-        Write-Host "    speech-hook already registered — skipping (nothing to do)."
+    $registered = $existing -match '(?m)^\s*- id:\s*dsh-speak\b'
+    $legacy = $existing -match '(?m)^\s*- id:\s*speech-hook\b'
+    if ($registered -or $legacy) {
+        if ($legacy -and -not $registered) {
+            Write-Host "    an older 'id: speech-hook' row already registers dsh-speak — skipping."
+            Write-Host "    (optional) rename that row's id to dsh-speak so your saved options live under the documented key."
+        } else {
+            Write-Host "    dsh-speak already registered — skipping (nothing to do)."
+        }
         Write-Host ""
         Write-Host "Done. Restart the DSH web app to pick up the plugin."
         exit 0
@@ -52,21 +69,29 @@ if (Test-Path $cordisPatch) {
     Write-Host "    backup -> $backup"
     $block = @"
 
-# speech-hook: auto voice-announce assistant replies (installed by dsh-speak)
+# dsh-speak: auto voice-announce assistant replies (installed by dsh-speak)
+# insert = the entry itself; the top-level row is what the settings page edits.
 - insert:
-    - id: speech-hook
+    - id: dsh-speak
       name: '$pluginUrl'
+- id: dsh-speak
+  name: '$pluginUrl'
+  config: {}
 "@
     Add-Content -Path $cordisPatch -Value $block -Encoding UTF8
-    Write-Host "    appended insert entry -> $cordisPatch"
+    Write-Host "    appended insert + settings entry -> $cordisPatch"
 } else {
     New-Item -ItemType Directory -Force -Path (Split-Path $cordisPatch) | Out-Null
     $content = @"
 # dsh profile patch layer (created by dsh-speak installer)
-# speech-hook: auto voice-announce assistant replies
+# dsh-speak: auto voice-announce assistant replies
+# insert = the entry itself; the top-level row is what the settings page edits.
 - insert:
-    - id: speech-hook
+    - id: dsh-speak
       name: '$pluginUrl'
+- id: dsh-speak
+  name: '$pluginUrl'
+  config: {}
 "@
     Set-Content -Path $cordisPatch -Value $content -Encoding UTF8
     Write-Host "    created -> $cordisPatch"

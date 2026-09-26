@@ -140,20 +140,31 @@ no "reply finished" hook, so the plugin observes the session event stream:
 - **Optional event announcements** (1.6.0, all off by default): `turn/end`,
   `command/done`, `goal/change`, `tool/result` (on error), and `todo/write` each
   have an independent toggle and announce a fixed phrase on fire (see §5).
-- **Settings namespace registration** (1.6.0): the plugin wires its namespace
-  through the settings *service* — `ctx.inject(['settings'])` →
-  `settings.register('dsh-speak', schema, { base: patchConfig })` → re-derive
-  `cfg` from `scope.get()` on every `scope.watch` notification, and restore the
-  composed patch config when the fiber unloads. Resolution stays schema default
-  → patch `config` → UI user layer.
-  The plugin never imports `@deepseek-ai/dsh-settings`: DSH 0.1.2-alpha.1 deleted
-  the `installSettingsSection` / `settingsNamespace` helpers, and referencing
-  them is fatal — a missing named export is a module-evaluation error, and the
-  old lazy call threw `settingsNamespace is not a function` inside a timer
-  callback, which crashed the host (dsh exited 1 instead of booting). The service
-  itself never changed. On hosts without a settings service the inject callback
-  never runs and the plugin works purely from the patch config — graceful
-  degradation with no version check.
+- **Settings form** (1.6.0, reworked in 1.8.2 for DSH 0.1.7): the plugin exports a
+  static `Config` schema (`module.exports.Config`, every field `.volatile()`), and
+  the settings service projects it into the settings UI. The entry's **Loader id
+  is the settings namespace** (`dsh-speak` in `cordis.patch.yml`), so there is
+  nothing to register: `ctx.settings.describe()` reads the schema off the active
+  entry, and the browser binds the same id through `ctx.configForms`. A write
+  commits the new values into the running fiber's config *references* and emits
+  `loader/volatile-update`; the plugin re-derives `cfg` there, which is what makes
+  an edit audible without a restart. Resolution stays schema default → patch
+  `config` → UI user layer.
+  The schema must exist at module load: the Loader reads
+  `module.exports.Config` right after importing the plugin, before any context
+  exists, so it is built with `createRequire(__filename)` instead of the old
+  `ctx.baseUrl` fallback. When the schemastery peer cannot be resolved, `Config`
+  is `undefined`, the entry simply owns no settings page, and the plugin keeps
+  running on the composed patch config — graceful degradation with no version
+  check. `settings.configure({ auto: false }, ctx.fiber)` opts the entry out of
+  the shell's automatically generated form, because the browser half ships a
+  hand-written page.
+  The plugin still never imports `@deepseek-ai/dsh-settings`: DSH 0.1.2-alpha.1
+  deleted the `installSettingsSection` / `settingsNamespace` helpers (referencing
+  them is fatal — a missing named export is a module-evaluation error, and the old
+  lazy call threw `settingsNamespace is not a function` inside a timer callback,
+  which crashed the host), and 0.1.7 then deleted the
+  `settings.register(ns, schema, { base })` service API that had replaced them.
 
 Registration snippet (also automated by `install.ps1`; npm installs use the bare
 package name `'dsh-speak'` — this is the file-install path):
@@ -161,13 +172,59 @@ package name `'dsh-speak'` — this is the file-install path):
 ```yaml
 # ~/.dsh/profiles/web/cordis.patch.yml
 - insert:
-    - id: speech-hook
+    - id: dsh-speak
       # replace <your-username> with your Windows username
       name: 'file:///C:/Users/<your-username>/.dsh/profiles/web/plugins/speech-hook.js'
+- id: dsh-speak
+  name: 'file:///C:/Users/<your-username>/.dsh/profiles/web/plugins/speech-hook.js'
+  config: {}
 ```
 
 > Node's ESM loader does not accept Windows absolute paths as plugin names — the
 > `file:///C:/...` URL form is required.
+
+> **Two rows, and the shape is load-bearing.** The `insert` row provides the entry;
+> the TOP-LEVEL row is the one the settings page persists into.
+> `config-editor.edit()` rewrites a `config` in place only after finding a
+> top-level, non-insert row with the same id+name (`document.setIn([index,
+> "config"], …)`), and its `inherited()` helper strips `config` from exactly those
+> rows to compute the base layer. A `config` nested inside the `insert` row — the
+> shape 1.8.x profiles carry, and the obvious-looking one — is not addressable that
+> way: the editor appends a fresh top-level row, that generation's
+> `reconcileProfilePatches` runs, and the write is then rolled back. Observed
+> symptom: the settings page answers `ok: true`, the running plugin obeys the edit
+> immediately (the volatile refs are committed), the patch file flickers
+> `3874 → 4345 → 3874` bytes, and the option silently reverts on the next boot.
+> With the two-row shape the same edit lands in-place in ~0.3 s
+> (`scripts/settings-ui-check.py` asserts the persistence).
+
+> **Entry id = settings namespace.** Before 1.8.2 the id was `speech-hook` and the
+> namespace was registered in code, so the two were independent; every 1.8.x
+> profile patch therefore still says `speech-hook`. The browser half accepts both
+> ids (`SETTINGS_NAMESPACES`) and binds whichever the Host serves, so upgrading
+> needs no profile edit — only the *documented* id changed, and with it the key a
+> fresh install stores its options under.
+
+> **One entry per profile.** Two rows mounting this plugin (usually the bundle
+> entry plus a leftover hand-written insert) would run two speech queues and
+> double every announcement. `apply()` claims the process with a
+> `Symbol.for('dsh-speak.active')` flag on `globalThis` (not a module variable: two
+> rows may spell the same file differently, and Node would then evaluate the module
+> twice, each copy seeing its own flag); the extra instance logs and stays inert,
+> and the claim is released when the owning fiber disposes so a surviving row can
+> take over.
+>
+> The guard covers **speech only**, and a duplicate entry id has a second,
+> nastier consequence this half cannot fix: `config-editor.entries()` keeps only
+> uniquely-ided entries (`counts.get(entry.options.id) === 1`), and its sanity
+> check composes the candidate patches and compares `find(row => row.id === …)`
+> — the FIRST row for that id — against the value it is writing. With the id
+> present twice that comparison can never match, so **every settings write is
+> refused** with `settings/rejected: Configuration for "dsh-speak" is overridden by
+> a home patch or command-line overlay`, while speech keeps working normally. That
+> is why the installer, the two READMEs and this note all insist on exactly one
+> registration path (bundle entry **or** hand-written rows, never both), and why
+> the log line for the duplicate names the settings symptom too.
 
 ### 3.4 DSH browser half — `client/client.js`
 
@@ -191,8 +248,13 @@ that registers two pieces of UI:
   (Button / DisclosureRow / Input; Toggle / Options / SettingInput helpers). Every
   option (master switch, automatic speech, queueAllMessages, Markdown cleaning,
   code blocks, maxChars, longTextMode, fixed prompt, approvals/questions, the five
-  optional events) is read/written through `settingsScope.bind({ namespace:
-  'dsh-speak' })`.
+  optional events) is read/written through `ctx.configForms.get(entryId)` — a
+  snapshot (`status` / `value` / `writable`) plus `subscribe` / `set` / `unset`,
+  the DSH 0.1.7 replacement for `settingsScope.bind({ namespace })`. The form is
+  bound inside `ctx.configForms.whileServed(SETTINGS_NAMESPACES, …)`, so the page
+  exists exactly while the Host actually serves one of those namespaces (and the
+  bound `entryId` is the one it serves); `dsh-speak` is the documented id and
+  `speech-hook` the pre-1.8.2 one.
 
 - The package declares its browser half via `package.json`
   `dsh.client: { platform: 'web' }` + `exports['./client']`; DSH's client-modules
@@ -287,8 +349,10 @@ config:
 
 Resolution order: schema default → patch `config` (base) → UI user layer. The
 browser dsh-speak settings page (`client/client.js`) and the patch YAML read/write
-the same settings document. Platform note: `maxChars` defaults to 0 on macOS
-(`say` has no ceiling) and 300 on Windows (SAPI safe limit).
+the same profile patch: a UI write is a field operation (`set` / `unset` path op)
+the settings service persists into the entry's `config` block. Platform note:
+`maxChars` defaults to 0 on macOS (`say` has no ceiling) and 300 on Windows (SAPI
+safe limit).
 
 Full configuration guide: the README's Configuration section.
 
@@ -353,8 +417,8 @@ dsh-speak` alone is sufficient — no separate copying step.
 
 ### Host requirement (`engines.dsh`)
 
-`package.json` declares `engines.dsh: >=0.1.5-rc.1`. That one field is what
-dsh-market reads to label the catalog card (`DSH >=0.1.5-rc.1`) and to decide
+`package.json` declares `engines.dsh: >=0.1.7-rc.2`. That one field is what
+dsh-market reads to label the catalog card (`DSH >=0.1.7-rc.2`) and to decide
 whether the plugin survives its "compatible with current DSH" filter:
 
 - the facts come from the package's npm `latest` manifest
@@ -365,7 +429,7 @@ whether the plugin survives its "compatible with current DSH" filter:
   (`@deepseek-ai/schemastery`, `@deepseek-ai/cordis` — the schemastery peer above
   therefore declares nothing about the DSH version);
 - all declarations are conjunctive and compared prerelease-aware, so
-  `>=0.1.5-rc.1` matches a `0.1.5-rc.1` host; a missing declaration shows up as
+  `>=0.1.7-rc.2` matches a `0.1.7-rc.2` host; a missing declaration shows up as
   "host requirement undeclared", never as "incompatible";
 - npm itself only enforces `engines.node` / `engines.npm`, so this key never
   blocks an install — it is marketplace metadata;
@@ -392,7 +456,7 @@ npm publish                                       # publishConfig.registry pins 
 dsh plugin --profile web add dsh-speak
 # then register in ~/.dsh/profiles/web/cordis.patch.yml:
 #   - insert:
-#       - id: speech-hook
+#       - id: dsh-speak
 #         name: 'dsh-speak'
 # restart the DSH web app
 ```

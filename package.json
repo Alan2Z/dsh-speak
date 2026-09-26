@@ -1,6 +1,6 @@
 {
   "name": "dsh-speak",
-  "version": "1.8.1",
+  "version": "1.8.2",
   "description": "Make your AI harness speak — voice announcements for DSH and other AI coding harnesses (Windows SAPI5 + macOS system voices)",
   "main": "adapters/dsh/speech-hook.js",
   "exports": {
@@ -60,7 +60,7 @@
   },
   "engines": {
     "node": ">=18",
-    "dsh": ">=0.1.5-rc.1"
+    "dsh": ">=0.1.7-rc.2"
   },
   "repository": {
     "type": "git",
@@ -70,11 +70,6 @@
   "license": "MIT",
   "peerDependencies": {
     "@deepseek-ai/schemastery": "^3.18.1"
-  },
-  "peerDependenciesMeta": {
-    "@deepseek-ai/schemastery": {
-      "optional": true
-    }
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org"

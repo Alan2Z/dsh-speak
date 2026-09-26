@@ -20,7 +20,7 @@ const path = require('path')
 
 const root = path.join(__dirname, '..')
 /** The DSH floor this release was verified against — move it only after testing. */
-const HOST_RANGE = '>=0.1.5-rc.1'
+const HOST_RANGE = '>=0.1.7-rc.2'
 
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
 
@@ -45,9 +45,31 @@ for (const readme of ['README.md', 'README.zh-CN.md']) {
 // --- dsh manifest -----------------------------------------------------------
 assert.strictEqual(pkg.dsh.bundle.patch, './cordis.patch.yml', 'dsh.bundle.patch')
 const patch = fs.readFileSync(path.join(root, 'cordis.patch.yml'), 'utf8')
-assert.ok(/id:\s*speech-hook/.test(patch), 'cordis.patch.yml must register id: speech-hook')
+// The entry id is the settings namespace on DSH >= 0.1.7, and the browser half
+// binds it — it must match the id the client's SETTINGS_NAMESPACES lists first.
+assert.ok(/id:\s*dsh-speak/.test(patch), 'cordis.patch.yml must register id: dsh-speak')
 assert.ok(/name:\s*dsh-speak/.test(patch), 'cordis.patch.yml must register name: dsh-speak')
-console.log('dsh.bundle.patch: registers speech-hook ✓')
+const client = fs.readFileSync(path.join(root, 'client', 'client.js'), 'utf8')
+const namespaces = client.match(/const SETTINGS_NAMESPACES = \[([^\]]*)\]/)
+assert.ok(namespaces, 'client/client.js must declare SETTINGS_NAMESPACES')
+assert.strictEqual(namespaces[1].match(/'([^']+)'/g).map(quoted => quoted.replace(/'/g, ''))[0], 'dsh-speak',
+  "the client's first settings namespace must be the entry id this patch registers")
+// The pre-1.8.2 entry id stays accepted so an existing profile keeps its page.
+assert.ok(/'speech-hook'/.test(namespaces[1]), 'the legacy speech-hook entry id must stay accepted')
+
+// Two rows, one shape — and the shape is load-bearing, not cosmetic. DSH's config
+// editor rewrites a `config` in place only on a TOP-LEVEL row; a `config` nested in
+// the `insert` row (what 1.8.2 shipped first, and what 1.8.x profiles carry) is
+// accepted by the settings page, applied to the running plugin, and then rolled
+// back on disk — the option silently reverts on the next boot. Shipping both rows
+// makes the first UI write persist. See the comment inside cordis.patch.yml.
+assert.ok(/^ {4}- id: dsh-speak$/m.test(patch),
+  'cordis.patch.yml must keep the insert row that provides the entry')
+assert.ok(/^- id: dsh-speak$/m.test(patch),
+  'cordis.patch.yml must keep the editable TOP-LEVEL dsh-speak row')
+assert.ok(/- id: dsh-speak\n {2}name: dsh-speak\n {2}config:/m.test(patch),
+  'the top-level dsh-speak row must carry the `config` the settings page edits')
+console.log('dsh.bundle.patch: entry + editable settings row, dsh-speak ✓')
 
 assert.strictEqual(pkg.dsh.client.platform, 'web', 'dsh.client.platform')
 assert.deepStrictEqual(pkg.dsh.client.inject,

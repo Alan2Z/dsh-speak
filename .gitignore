@@ -15,3 +15,7 @@ Thumbs.db
 
 # npm pack output
 *.tgz
+
+# output of manual dev helpers (regenerated on every run)
+scripts/settings-ui-check.png
+scripts/_recon.png

@@ -122,17 +122,26 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
   事件；开 = 每条 assistant 消息立即入队朗读（中间消息也读）。
 - **可选事件播报**（1.6.0，默认全关）：`turn/end`、`command/done`、
   `goal/change`、`tool/result`（出错时）、`todo/write` 各自独立开关（见 §5）。
-- **settings namespace 注册**（1.6.0）：插件通过 settings **服务**接线——
-  `ctx.inject(['settings'])` → `settings.register('dsh-speak', schema, { base:
-  patchConfig })` → 每次 `scope.watch` 通知时从 `scope.get()` 重新解析 cfg，
-  fiber 卸载时恢复成组合层的 patch config。配置解析仍是 schema 默认 → patch
-  `config` → UI 用户设置三层。
-  插件**不再 import** `@deepseek-ai/dsh-settings`：DSH 0.1.2-alpha.1 删除了
-  `installSettingsSection` / `settingsNamespace` 两个辅助导出，引用它们是致命
-  的——缺失的具名导出会在模块求值期直接报错；旧代码在 timer 回调里懒调用，抛
-  `settingsNamespace is not a function` 把宿主打崩（dsh 直接退出 1，起不来）。
-  服务本身从未变过。宿主没有 settings 服务时 inject 回调永不执行，插件完全按
-  patch `config` 工作——优雅退化，无需版本判断。
+- **设置表单**（1.6.0；1.8.2 为 DSH 0.1.7 重做）：插件导出一份静态 `Config`
+  schema（`module.exports.Config`，每个字段都 `.volatile()`），由 settings 服务
+  投影成设置界面。条目的 **Loader id 就是 settings namespace**
+  （`cordis.patch.yml` 里的 `dsh-speak`），所以没有任何需要注册的东西：
+  `ctx.settings.describe()` 直接从已激活条目上读 schema，浏览器端用
+  `ctx.configForms` 绑定同一个 id。写入会把新值提交进运行中 fiber 的 config
+  **引用**并发出 `loader/volatile-update`，插件在那里重新解析 `cfg`——这就是
+  "改设置无需重启即刻生效"的实现。解析顺序仍是 schema 默认 → patch `config` →
+  UI 用户设置。
+  schema 必须在模块加载时就存在：Loader 在 import 之后、任何 context 存在之前
+  就要读 `module.exports.Config`，所以它用 `createRequire(__filename)` 构建，而
+  不是旧的 `ctx.baseUrl` 回退。schemastery peer 解析不到时 `Config` 为
+  `undefined`，条目就没有设置页，插件继续按组合层 patch config 工作——优雅退化，
+  无需版本判断。`settings.configure({ auto: false }, ctx.fiber)` 让条目退出 shell
+  的自动生成表单（浏览器端自带手写页面）。
+  插件仍然**不 import** `@deepseek-ai/dsh-settings`：DSH 0.1.2-alpha.1 删除了
+  `installSettingsSection` / `settingsNamespace` 两个辅助导出（引用它们是致命的
+  ——缺失的具名导出会在模块求值期直接报错；旧代码在 timer 回调里懒调用，抛
+  `settingsNamespace is not a function` 把宿主打崩），0.1.7 又删掉了接替它们的
+  `settings.register(ns, schema, { base })` 服务 API。
 
 注册片段（`install.ps1` 也会自动完成；npm 安装用裸包名 `'dsh-speak'` 即可，
 这是文件安装方式用的路径）：
@@ -140,13 +149,47 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
 ```yaml
 # ~/.dsh/profiles/web/cordis.patch.yml
 - insert:
-    - id: speech-hook
+    - id: dsh-speak
       # 把 <your-username> 换成你的 Windows 用户名
       name: 'file:///C:/Users/<your-username>/.dsh/profiles/web/plugins/speech-hook.js'
+- id: dsh-speak
+  name: 'file:///C:/Users/<your-username>/.dsh/profiles/web/plugins/speech-hook.js'
+  config: {}
 ```
 
 > Node 的 ESM 加载器不接受 Windows 绝对路径作为插件名——必须用
 > `file:///C:/...` URL 形式。
+
+> **必须两行，而且这个形状是承重的。** `insert` 行负责提供条目，**顶层行**才是设置页
+> 写入的目标：`config-editor.edit()` 只有找到同 id+name 的顶层非 insert 行，才会用
+> `document.setIn([index, "config"], …)` 就地改写；它的 `inherited()` 也是从这些行里
+> 剥掉 `config` 来算 base 层。把 `config` 嵌在 `insert` 行里（1.8.x 的 profile 就是
+> 这个形状，看起来也最自然）则完全不可寻址：编辑器会追加一个新的顶层行，这一代
+> `reconcileProfilePatches` 跑完，然后这次写入被回滚。实测症状：设置页返回
+> `ok: true`、运行中的插件立刻生效（volatile 引用已提交）、patch 文件在
+> 3874 → 4345 → 3874 字节之间闪一下，然后选项在下次启动时悄悄变回去。改成两行后，
+> 同样的修改约 0.3 秒就地落盘（`scripts/settings-ui-check.py` 会断言这一点）。
+
+> **条目 id = settings namespace。** 1.8.2 之前条目 id 是 `speech-hook`，而
+> namespace 是在代码里注册的，两者互不相干；所以每个 1.8.x 的 profile patch
+> 写的都是 `speech-hook`。浏览器端两个 id 都认（`SETTINGS_NAMESPACES`），绑定
+> Host 实际服务的那个，因此升级**不需要改 profile**——变的只是文档里写的 id，
+> 以及全新安装时选项存放的 key。
+
+> **一个 profile 只能有一个条目。** 同一插件挂两次（通常是 bundle 条目 + 手写 insert
+> 残留）会跑两个语音队列，每条播报都念两遍。`apply()` 用
+> `Symbol.for('dsh-speak.active')` 挂在 `globalThis` 上占位（不用模块变量：同一个文件
+> 可能被写成两种说明符，Node 会求值两次，各自看到自己的标志），多余的实例只写日志、
+> 不挂载；拥有者 fiber 销毁时会释放占位，让活着的行接管。
+>
+> 这个守卫**只保语音**。重复的条目 id 还有一个这一半修不了的后果：
+> `config-editor.entries()` 只保留 id 唯一的条目（`counts.get(id) === 1`），而它的
+> 自检会把候选 patch 组合起来、拿 `find(row => row.id === …)`（**第一个**同 id 行）
+> 和它正要写入的值比较——id 出现两次时这个比较永远不相等，于是**每一次设置写入都被拒**：
+> `settings/rejected: Configuration for "dsh-speak" is overridden by a home patch or
+> command-line overlay`，而语音照常工作。所以安装脚本、两份 README 和这里都强调
+> **只能有一种注册方式**（bundle 条目 **或** 手写行，不能两者都有），重复实例的日志行
+> 里也会点名这个设置侧的症状。
 
 ### 3.4 DSH 浏览器端 — `client/client.js`
 
@@ -167,8 +210,12 @@ factory })`），注册两条 UI：
   用 `@deepseek-ai/dsh-client-ui-primitives` 的 Button/DisclosureRow/Input
   绘制（Toggle/Options/SettingInput 组件），所有配置项（总开关、自动朗读、
   queueAllMessages、Markdown 清洗、代码块、maxChars、longTextMode、固定提示语、
-  审批/提问、5 类可选事件）都通过 `settingsScope.bind({ namespace: 'dsh-speak' })`
-  读写。
+  审批/提问、5 类可选事件）都通过 `ctx.configForms.get(entryId)` 读写——一份快照
+  （`status` / `value` / `writable`）加 `subscribe` / `set` / `unset`，即 DSH
+  0.1.7 用来取代 `settingsScope.bind({ namespace })` 的接口。表单在
+  `ctx.configForms.whileServed(SETTINGS_NAMESPACES, …)` 里绑定，所以页面只在 Host
+  确实服务其中之一时存在（绑定的 `entryId` 就是它服务的那个）；`dsh-speak` 是
+  文档里的 id，`speech-hook` 是 1.8.2 之前那个。
 
 - 包通过 `package.json` 的 `dsh.client: { platform: 'web' }` +
   `exports['./client']` 声明浏览器端；DSH 的 client-modules 扫描到后自动加载。
@@ -259,8 +306,10 @@ config:
 ```
 
 配置解析顺序：schema 默认值 → patch `config`（base）→ UI 用户设置（user 层）。
-浏览器端 dsh-speak 设置页（`client/client.js`）与 patch YAML 读写同一个 settings
-文档。平台差异：`maxChars` macOS 默认 0（`say` 无上限）、Windows 默认 300。
+浏览器端 dsh-speak 设置页（`client/client.js`）与 patch YAML 读写同一份 profile
+patch：UI 写入是一组字段操作（`set` / `unset` path op），由 settings 服务落进该
+条目的 `config` 块。平台差异：`maxChars` macOS 默认 0（`say` 无上限）、Windows
+默认 300。
 
 完整配置指南见 README 的"配置"一节。
 
@@ -306,8 +355,8 @@ DSH 的插件机制基于 Cordis，官方安装树外插件的路径是
 - `package.json` — `name: dsh-speak`，`main: adapters/dsh/speech-hook.js`，
   `files` 白名单精确列出发布内容（插件、`engine/*.ps1`、`install.ps1`、文档、
   LICENSE）。`prepublishOnly` 会对插件跑 `node --check`。
-- 插件入口就是文件安装已用的同一个 CJS 模块（`module.exports = { apply(ctx) }`）
-  ——发布**不需要改任何代码**。
+- 插件入口就是文件安装已用的同一个 CJS 模块（`module.exports = { apply(ctx) }`，
+  另加 1.8.2 起用于设置表单的静态 `Config` 导出）——发布**不需要改任何代码**。
 
 ### 引擎解析（npm 安装 vs 文件安装）
 
@@ -323,15 +372,15 @@ DSH 的插件机制基于 Cordis，官方安装树外插件的路径是
 
 ### 宿主要求（`engines.dsh`）
 
-`package.json` 声明了 `engines.dsh: >=0.1.5-rc.1`。dsh-market 只读这一个字段来标注
-目录卡片（`DSH >=0.1.5-rc.1`）并决定插件能否通过「适配当前 DSH」筛选：
+`package.json` 声明了 `engines.dsh: >=0.1.7-rc.2`。dsh-market 只读这一个字段来标注
+目录卡片（`DSH >=0.1.7-rc.2`）并决定插件能否通过「适配当前 DSH」筛选：
 
 - 数据源是该包 npm `latest` manifest（`{registry}/<pkg>/latest`，缓存约 24 小时）
   ——`awesome-dsh-plugin` 里那份目录 YAML 没有宿主字段，往那里提 PR 声明不了；
 - `engines.dsh` 属于 `engine` 声明；同版本线的 `@deepseek-ai/dsh*` **peer** 也算，
   但非同一版本线的宿主包会被有意跳过（`@deepseek-ai/schemastery`、
   `@deepseek-ai/cordis`）——所以上面那条 schemastery peer 不构成任何 DSH 版本声明；
-- 所有声明取交集，比较时带 prerelease 语义，`>=0.1.5-rc.1` 能匹配 `0.1.5-rc.1`
+- 所有声明取交集，比较时带 prerelease 语义，`>=0.1.7-rc.2` 能匹配 `0.1.7-rc.2`
   宿主；完全没声明只会显示「未声明宿主要求」，不会显示成不兼容；
 - npm 本身只强制 `engines.node` / `engines.npm`，这个键不会挡住安装，它只是市场
   元数据；
@@ -357,7 +406,7 @@ npm publish                                       # publishConfig.registry 已�
 dsh plugin --profile web add dsh-speak
 # 然后在 ~/.dsh/profiles/web/cordis.patch.yml 注册：
 #   - insert:
-#       - id: speech-hook
+#       - id: dsh-speak
 #         name: 'dsh-speak'
 # 重启 DSH web 应用
 ```

@@ -43,6 +43,7 @@ cp.spawn = (cmd, args, opts) => {
 // --- minimal Cordis ctx factory (fresh listeners per scenario) ---
 function makeCtx() {
   const listeners = {}
+  const disposers = []
   const ctx = {
     on(name, cb) { listeners[name] = cb },
     inject(services, cb) {
@@ -59,21 +60,33 @@ function makeCtx() {
         })
       }
     },
-    effect(fn) { return fn ? fn() : () => {} },
+    effect(fn) {
+      const dispose = fn ? fn() : undefined
+      if (typeof dispose === 'function') disposers.push(dispose)
+      return dispose
+    },
     baseUrl: __filename,
   }
   ctx.__fire = (type, data) => { if (listeners['session/event']) listeners['session/event'](null, { type, data }) }
   // event payload is { type, data: <payload> }; data carries turn/step/message
   ctx.__fireEvent = (type, payload) => { if (listeners['session/event']) listeners['session/event'](null, { type, data: payload, surfaceOp: 'append' }) }
+  /** Simulate fiber disposal — each scenario is its own mount of the plugin. */
+  ctx.__dispose = () => { while (disposers.length > 0) { const dispose = disposers.pop(); try { dispose() } catch (e) { /* ignore */ } } }
   return ctx
 }
 
 const hook = require(path.join(__dirname, '..', 'adapters', 'dsh', 'speech-hook.js'))
 
+// Every scenario mounts the plugin fresh, so the previous mount's fiber is disposed
+// first: the host half claims single-instance ownership and would otherwise leave the
+// following scenarios inert (which is exactly what the guard is for).
+let mounted = null
 function applyWith(config) {
   announced.length = 0
   spawned.length = 0
+  if (mounted) mounted.__dispose()
   const ctx = makeCtx()
+  mounted = ctx
   hook.apply(ctx, config)
   return {
     fire(type, data) { ctx.__fire(type, data) },
@@ -349,6 +362,23 @@ async function main() {
   // announceApprovals off → 不播
   out = await approvalCase(false, 'escalate sandbox to danger-full-access: 不应播报')
   assert.ok(!out.some(t => t === '不应播报'), `announceApprovals off silent: ${JSON.stringify(out)}`)
+
+  // ---- 15. numeric normalization: an explicit 0 survives; SAPI-unsafe values clamp ----
+  // A user's 0 is meaningful (volume 0 = silence, maxChars 0 = unlimited) and used to
+  // be swallowed by `|| fallback`; an out-of-range SAPI Rate/Volume makes speak.ps1
+  // throw, so it must be clamped before it reaches the engine.
+  const t15 = applyWith({ throttleMs: 10, volume: 0, maxChars: 0, rate: process.platform === 'win32' ? 175 : 0 })
+  t15.fireEvent('assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: '数值规整检查。' }] } })
+  await t15.flush(120)
+  const engineArgs = (spawned.find(s => s.cmd === 'powershell.exe') || spawned[0] || {}).args
+  assert.ok(Array.isArray(engineArgs), `a speech process was spawned: ${JSON.stringify(spawned.map(s => s.cmd))}`)
+  const argOf = flag => engineArgs[engineArgs.indexOf(flag) + 1]
+  assert.strictEqual(argOf('-Volume'), '0', `explicit volume 0 must reach the engine, got ${argOf('-Volume')}`)
+  assert.strictEqual(argOf('-MaxChars'), '0', `explicit maxChars 0 must reach the engine, got ${argOf('-MaxChars')}`)
+  if (process.platform === 'win32') {
+    assert.strictEqual(argOf('-Rate'), '10', `out-of-range SAPI rate must clamp to 10, got ${argOf('-Rate')}`)
+  }
+  await t15.finishAll()
 
   console.log('ALL PASS ✓')
   process.exit(0)

@@ -19,9 +19,10 @@
 //       - on: every assistant/message is enqueued immediately as it arrives
 //   * a `/dsh-speak/control` POST route (play/stop/status) and a
 //     `/dsh-speak/ws` WebSocket publish the authoritative speech state
-//   * a `dsh-speak` settings namespace registered through the settings SERVICE
-//     (`ctx.inject(['settings'])` → `settings.register`); schema defaults →
-//     patch config → UI user layer
+//   * a settings form projected from THIS module's exported `Config` (DSH >=
+//     0.1.7 reads each Loader entry's own Config); schema defaults → patch
+//     config → UI user layer. The settings namespace is the entry id
+//     (`dsh-speak`), and a write commits into the live config references
 //   * `enabled` master switch: when off, nothing is ever enqueued (no sound)
 //
 // Trigger semantics:
@@ -39,7 +40,6 @@
 'use strict'
 
 const { spawn } = require('child_process')
-const { createRequire } = require('module')
 const { WebSocketServer, WebSocket } = require('ws')
 const fs = require('fs')
 const os = require('os')
@@ -51,9 +51,6 @@ function log(...args) {
 }
 
 const ENGINE_NAME = process.platform === 'darwin' ? 'speak.sh' : 'speak.ps1'
-// Settings namespace of this plugin (lowercase kebab-case; must match the
-// browser card's namespace in client/client.js).
-const SETTINGS_NS = 'dsh-speak'
 
 /**
  * Locate the engine script:
@@ -73,10 +70,34 @@ function resolveEngine(override) {
 const DEFAULT_MAX_CHARS = process.platform === 'darwin' ? 0 : 300
 
 // ---------------------------------------------------------------------------
-// Settings namespace (best-effort; registered through the `settings` service)
+// Settings (DSH >= 0.1.7: this module's own exported `Config` is the form)
 // ---------------------------------------------------------------------------
-// The schema mirrors every config key. Values resolve as:
-// schema default → patch `config` (base) → user settings layer (the UI).
+// 0.1.7 replaced the imperative `settings.register(namespace, schema, { base })`
+// provider API with Config projection: the settings service reads every ACTIVE
+// Loader entry's own exported `Config` schema and projects its `.volatile()`
+// fields into the settings UI (`ctx.settings.describe()` on the host,
+// `ctx.configForms` in the browser). There is no namespace to register any
+// more — the namespace IS the Loader entry id (`dsh-speak`; see
+// cordis.patch.yml), which is what client/client.js binds.
+//
+// What that changes here:
+//   * the schema must exist as a static export, built at module load (the
+//     Loader reads `module.exports.Config` before any context exists),
+//   * volatile fields reach apply() as stable references (`config.enabled
+//     .get()`), not plain values,
+//   * a settings write commits into those references in place and emits
+//     `loader/volatile-update` — no restart, so cfg is re-derived there.
+//
+// Nothing is registered from this half any more: 0.1.2-alpha.1 had deleted
+// `installSettingsSection` / `settingsNamespace`, and 0.1.7 deleted the
+// `settings.register` service API that had replaced them in 1.6.0. The only
+// thing left to do is opt out of the shell's auto-generated page (it would
+// duplicate the hand-written one in client/client.js).
+//
+// Values still resolve as: schema default → patch `config` → UI user layer.
+// `SCHEMA_DEFAULTS` is the normalization fallback used when the schemastery
+// peer is unavailable (no Config → no settings page, patch config only);
+// test-settings-integration.js asserts it stays in sync with the real schema.
 const SCHEMA_DEFAULTS = {
   enabled: true,
   automaticSpeech: true,
@@ -106,9 +127,32 @@ const SCHEMA_DEFAULTS = {
 }
 
 /**
+ * Coerce one numeric config field.
+ *
+ * An explicit value wins — including 0, which is meaningful for `throttleMs` (no
+ * merging), `maxChars` (macOS: unlimited) and `volume` (silence). The fallback
+ * applies only when the field is absent or unparseable, and the result is clamped
+ * to what the engine accepts, because an out-of-range SAPI `Rate` (-10..10) or
+ * `Volume` (0..100) makes `speak.ps1` throw — i.e. silence with no explanation.
+ * `||` is deliberately NOT used here: it silently turned a user's 0 into the
+ * fallback and let negatives through.
+ * @param field - config key, for the clamp diagnostic.
+ * @returns the usable number.
+ */
+function configNumber(field, value, fallback, min, max) {
+  if (value === undefined || value === null || value === '') return fallback
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  const clamped = Math.min(max, Math.max(min, Math.round(parsed)))
+  if (clamped !== parsed) log('settings 值超出范围，已钳制:', field, parsed, '->', clamped)
+  return clamped
+}
+
+/**
  * Resolve the raw settings value into the mutable `cfg` the queue reads.
- * Kept as a pure function so both the initial apply and settings onChange use
- * the same normalization (engine re-resolution, platform maxChars default).
+ * Kept a pure mapping (only a diagnostic line when a value had to be clamped) so
+ * the initial apply and every `loader/volatile-update` normalize identically
+ * (engine re-resolution, platform defaults, SAPI-safe ranges).
  */
 function resolveConfig(value) {
   value = value || {}
@@ -118,21 +162,25 @@ function resolveConfig(value) {
     cleanMarkdownFormatting: value.cleanMarkdownFormatting !== false,
     readInlineCode: value.readInlineCode !== false,
     codeBlocks: ['all', 'smart', 'replace'].includes(value.codeBlocks) ? value.codeBlocks : 'smart',
-    codeBlockMaxChars: Number(value.codeBlockMaxChars != null ? value.codeBlockMaxChars : 300),
+    codeBlockMaxChars: configNumber('codeBlockMaxChars', value.codeBlockMaxChars, 300, 0, Number.MAX_SAFE_INTEGER),
     codeBlockReplacementText: String(value.codeBlockReplacementText || 'You can see the code in our history.'),
     queueAllMessages: value.queueAllMessages === true,
-    throttleMs: Number(value.throttleMs != null ? value.throttleMs : 1500) || 1500,
+    throttleMs: configNumber('throttleMs', value.throttleMs, 1500, 0, Number.MAX_SAFE_INTEGER),
     replayFullRead: value.replayFullRead === true,
     engine: resolveEngine(value.engine || ''),
     announceApprovals: value.announceApprovals !== false,
     announceQuestions: value.announceQuestions !== false,
     stripApprovalPrefix: value.stripApprovalPrefix !== false,
-    questionGapMs: Math.max(0, Number(value.questionGapMs != null ? value.questionGapMs : 2000)) || 0,
+    questionGapMs: configNumber('questionGapMs', value.questionGapMs, 2000, 0, Number.MAX_SAFE_INTEGER),
     longTextMode: value.longTextMode === 'heading' ? 'heading' : 'message',
     longTextMessage: String(value.longTextMessage || SCHEMA_DEFAULTS.longTextMessage),
-    maxChars: Number(value.maxChars != null ? value.maxChars : DEFAULT_MAX_CHARS) || 0,
-    volume: Number(value.volume != null ? value.volume : 50) || 50,
-    rate: Number(value.rate != null ? value.rate : 0) || 0,
+    maxChars: configNumber('maxChars', value.maxChars, DEFAULT_MAX_CHARS, 0, Number.MAX_SAFE_INTEGER),
+    volume: configNumber('volume', value.volume, 50, 0, 100),
+    // Windows: SAPI scale -10..10. macOS: words per minute (0 = engine default),
+    // where the engine passes -r only for a positive value anyway.
+    rate: process.platform === 'darwin'
+      ? configNumber('rate', value.rate, 0, 0, Number.MAX_SAFE_INTEGER)
+      : configNumber('rate', value.rate, 0, -10, 10),
     announceTurnEnd: value.announceTurnEnd === true,
     announceCommandDone: value.announceCommandDone === true,
     announceGoalChange: value.announceGoalChange === true,
@@ -142,111 +190,151 @@ function resolveConfig(value) {
 }
 
 /**
- * Resolve a module specifier from the plugin's own location first, then from
- * the booted profile tree. `@deepseek-ai/schemastery` is a peer of this package
- * and lives beside it after an npm/pnpm install; the profile-tree fallback
- * covers the file:// install used by install.ps1 and repo checkouts.
- * @returns the module, or null when neither base resolves it.
+ * Read one config field from whatever shape the Loader handed us: a volatile
+ * field arrives as a reference (`{ get() }`, cosmokit `createVolatile`), a
+ * plugin mounted without a Config schema receives plain values, and an omitted
+ * field is simply `undefined`.
+ * @returns the current plain value, or undefined.
  */
-function requirePeer(ctx, spec) {
-  const bases = [__filename, ctx.baseUrl].filter(Boolean)
-  for (const base of bases) {
-    try { return createRequire(base)(spec) } catch (e) { /* try the next base */ }
-  }
-  return null
+function configValue(config, key) {
+  if (!config) return undefined
+  const value = config[key]
+  if (value === undefined || value === null) return undefined
+  if (typeof value === 'object' && typeof value.get === 'function') return value.get()
+  return value
 }
 
 /**
- * Build the settings schema + entry for the settings namespace. Best-effort:
- * any failure (missing peer packages) returns null and the plugin keeps the
- * patch config.
+ * Detach every known field into the plain object `resolveConfig` normalizes.
+ * Read fresh on each call: the references are updated in place by a settings
+ * write, so the same `config` object always yields the current values.
  */
-function buildSettingsNamespace(ctx, patch) {
+function rawConfig(config) {
+  const raw = {}
+  for (const key of Object.keys(SCHEMA_DEFAULTS)) raw[key] = configValue(config, key)
+  return raw
+}
+
+/**
+ * The settings namespace this plugin owns: its Loader entry id. That id is what
+ * the settings service projects the form under (`settings.describe()` →
+ * `ctx.configForms.get(id)` in the browser) and what client/client.js binds.
+ * `settingsNamespace` is also the name the plugin used for its settings before
+ * 0.1.7, so the browser half accepts either spelling.
+ * @returns the entry id, or undefined when mounted without a Loader.
+ */
+function settingsNamespace(ctx) {
+  try { return ctx.fiber && ctx.fiber.entry ? ctx.fiber.entry.options.id : undefined } catch (e) { return undefined }
+}
+
+/**
+ * Build the settings form schema — the module's static `Config` export.
+ *
+ * Resolved at load time because the Loader reads `module.exports.Config`
+ * immediately after importing the plugin, before any context exists (the old
+ * `ctx.baseUrl` fallback is therefore unavailable here, and `__filename` is
+ * enough: it walks the profile's own `node_modules` chain either way).
+ * Best-effort: an installation that cannot resolve the schemastery peer gets no
+ * settings page (Config stays undefined) and keeps running on the composed
+ * patch `config`.
+ * @returns the schema, or undefined when the peer is unavailable.
+ */
+function buildConfig() {
   try {
-    const z = requirePeer(ctx, '@deepseek-ai/schemastery')
-    if (!z) throw new Error('@deepseek-ai/schemastery 不可解析')
-    const schema = z.object({
-      enabled: z.boolean().default(true),
-      automaticSpeech: z.boolean().default(true),
-      cleanMarkdownFormatting: z.boolean().default(true),
-      readInlineCode: z.boolean().default(true),
-      codeBlocks: z.union(['all', 'smart', 'replace']).default('smart'),
-      codeBlockMaxChars: z.natural().default(300),
-      codeBlockReplacementText: z.string().default('You can see the code in our history.'),
-      queueAllMessages: z.boolean().default(false),
-      throttleMs: z.natural().default(1500),
-      replayFullRead: z.boolean().default(false),
-      engine: z.string().default(''),
-      announceApprovals: z.boolean().default(true),
-      announceQuestions: z.boolean().default(true),
-      stripApprovalPrefix: z.boolean().default(true),
-      questionGapMs: z.natural().default(2000),
-      longTextMode: z.union(['message', 'heading']).default('message'),
-      longTextMessage: z.string().default('本次播报内容较长，请自行阅读。'),
-      maxChars: z.natural().default(DEFAULT_MAX_CHARS),
-      volume: z.natural().default(50),
-      rate: z.number().default(0),
-      announceTurnEnd: z.boolean().default(false),
-      announceCommandDone: z.boolean().default(false),
-      announceGoalChange: z.boolean().default(false),
-      announceToolErrors: z.boolean().default(false),
-      announceTodoWrite: z.boolean().default(false),
+    const z = require('module').createRequire(__filename)('@deepseek-ai/schemastery')
+    return z.object({
+      enabled: z.boolean().default(true).volatile(),
+      automaticSpeech: z.boolean().default(true).volatile(),
+      cleanMarkdownFormatting: z.boolean().default(true).volatile(),
+      readInlineCode: z.boolean().default(true).volatile(),
+      codeBlocks: z.union(['all', 'smart', 'replace']).default('smart').volatile(),
+      codeBlockMaxChars: z.natural().default(300).volatile(),
+      codeBlockReplacementText: z.string().default('You can see the code in our history.').volatile(),
+      queueAllMessages: z.boolean().default(false).volatile(),
+      throttleMs: z.natural().default(1500).volatile(),
+      replayFullRead: z.boolean().default(false).volatile(),
+      engine: z.string().default('').volatile(),
+      announceApprovals: z.boolean().default(true).volatile(),
+      announceQuestions: z.boolean().default(true).volatile(),
+      stripApprovalPrefix: z.boolean().default(true).volatile(),
+      questionGapMs: z.natural().default(2000).volatile(),
+      longTextMode: z.union(['message', 'heading']).default('message').volatile(),
+      longTextMessage: z.string().default('本次播报内容较长，请自行阅读。').volatile(),
+      maxChars: z.natural().default(DEFAULT_MAX_CHARS).volatile(),
+      volume: z.natural().default(50).volatile(),
+      rate: z.number().default(0).volatile(),
+      announceTurnEnd: z.boolean().default(false).volatile(),
+      announceCommandDone: z.boolean().default(false).volatile(),
+      announceGoalChange: z.boolean().default(false).volatile(),
+      announceToolErrors: z.boolean().default(false).volatile(),
+      announceTodoWrite: z.boolean().default(false).volatile(),
     })
-    return { schema, entry: { ...SCHEMA_DEFAULTS, ...(patch || {}) } }
   } catch (e) {
-    log('settings 依赖不可用，跳过 settings namespace 注册:', e && e.message)
-    return null
+    log('settings 依赖不可用，跳过 settings 表单（继续用 patch config）:', e && e.message)
+    return undefined
   }
 }
 
 module.exports = {
-  apply(ctx, config) {
-    config = config || {}
-    let cfg = resolveConfig(config)
+  // Static settings form schema projected by the settings service (DSH >=
+  // 0.1.7). Undefined when the schemastery peer cannot be resolved.
+  Config: buildConfig(),
 
-    // ---- settings namespace -------------------------------------------------
-    // Wire the namespace through the settings SERVICE.
+  apply(ctx, config) {
+    // ---- duplicate-entry guard ----------------------------------------------
+    // One profile must mount this plugin exactly ONCE. A second row with the same
+    // id (or the legacy `speech-hook` id) is easy to create by accident — adding
+    // `dsh-speak` to `dsh.profile.bundles` while the hand-written insert row is
+    // still there is the usual way. Two live instances would mean two FIFO queues
+    // announcing everything twice and two claims on the `/dsh-speak/ws` route.
     //
-    // dsh 0.1.2-alpha.1 deleted the `installSettingsSection` / `settingsNamespace`
-    // convenience exports from `@deepseek-ai/dsh-settings`; what remains — and
-    // has not changed since 0.1.0-rc.7 — is the `settings` service itself
-    // (`ctx.settings.register(ns, schema, { base })` → `{ get, watch, update,
-    // replace }`). Referencing the removed names is fatal: an ESM named import
-    // of a deleted export is a module-evaluation SyntaxError that kills the host
-    // boot, and a lazy `settingsModule.installSettingsSection(...)` call — what
-    // this plugin used to do inside a timer callback — throws
-    // `settingsNamespace is not a function` and crashed dsh before it served.
+    // The claim is keyed on `globalThis`, not on a module variable: two rows may
+    // name this file differently (a `file:///…` URL beside the bare package name)
+    // and Node would then evaluate the module twice, each copy seeing its own
+    // module-scope flag. The extra instance stays inert and says so in the log —
+    // remove the duplicate row and reload to hand ownership over.
     //
-    // `ctx.inject(['settings'])` is the graceful-degradation boundary: on a host
-    // with no settings provider the callback never runs and the composed patch
-    // config stands as-is.
-    const prepared = buildSettingsNamespace(ctx, config)
-    if (prepared) {
-      ctx.inject(['settings'], scopedCtx => {
-        // `scope.get()` is the live resolved value (schema default → patch
-        // config → UI user layer), so re-deriving cfg from it on every change
-        // is what makes a settings edit take effect without a restart.
-        let settingsSource = () => prepared.entry
-        const applySettings = () => {
-          try { cfg = resolveConfig(settingsSource()) } catch (e) { log('settings 变更应用失败:', e && e.message) }
-        }
-        try {
-          const scope = scopedCtx.settings.register(SETTINGS_NS, prepared.schema, { base: prepared.entry })
-          settingsSource = () => scope.get()
-          // Unload restores the composed entry, so a disabled plugin cannot
-          // leave the queue reading a value nobody can see or change any more.
-          scopedCtx.effect(() => () => {
-            settingsSource = () => prepared.entry
-            applySettings()
-          })
-          scope.watch(applySettings)
-          applySettings()
-          log('settings namespace 已注册:', SETTINGS_NS)
-        } catch (e) {
-          log('settings namespace 注册失败，继续使用 patch config:', e && e.message)
-        }
-      })
+    // This guard protects SPEECH only. A duplicated entry id also breaks the
+    // settings page in a way this half cannot fix: DSH's config editor keeps only
+    // uniquely-ided entries, so every write is refused with
+    // `settings/rejected: Configuration for "dsh-speak" is overridden by a home
+    // patch or command-line overlay` while speech keeps working. Hence the hint in
+    // the log line below.
+    const claim = Symbol.for('dsh-speak.active')
+    if (globalThis[claim] !== undefined) {
+      log('已有实例在运行，本行不再挂载（条目 id =', settingsNamespace(ctx),
+        '）：请删掉重复的 dsh-speak 行后重载 —— 重复的 id 还会让设置页的写入被拒（overridden by a home patch）')
+      return
     }
+    globalThis[claim] = true
+    ctx.effect(() => () => { if (globalThis[claim] === true) delete globalThis[claim] }, 'dsh-speak: single-instance claim')
+
+    // Live configuration: the references inside `config` are updated in place
+    // by a settings write, so cfg is re-derived from them (see below).
+    const readConfig = () => resolveConfig(rawConfig(config))
+    let cfg = readConfig()
+
+    // ---- settings presentation ----------------------------------------------
+    // This plugin ships a hand-written settings page (client/client.js), so the
+    // entry opts out of the shell's automatically generated form — otherwise the
+    // same fields would appear twice. Presentation-only and non-fatal: a host
+    // without the settings service simply has no pages at all.
+    ctx.inject(['settings'], scopedCtx => {
+      if (!ctx.fiber) return
+      try {
+        scopedCtx.effect(() => scopedCtx.settings.configure({ auto: false }, ctx.fiber))
+        log('settings 表单由 settings 服务投影（entry =', settingsNamespace(ctx), '，自动页面已关闭）')
+      } catch (e) {
+        log('settings.configure 失败，保留默认页面策略:', e && e.message)
+      }
+    })
+
+    // A settings write commits into the running fiber's config references and
+    // emits this event; re-deriving cfg is what makes the edit audible without
+    // restarting dsh.
+    ctx.on('loader/volatile-update', () => {
+      try { cfg = readConfig() } catch (e) { log('settings 变更应用失败:', e && e.message) }
+    })
 
     // ---- host-owned FIFO speech queue + WebSocket state sync (PR #2) ----
     let activeSpeech = null

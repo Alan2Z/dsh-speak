@@ -10,7 +10,8 @@
 // Host contract (adapters/dsh/speech-hook.js):
 //   * /dsh-speak/control  — POST { action: 'play'|'stop'|'status', ... }
 //   * /dsh-speak/ws       — WebSocket publishing { type: 'speech-state', ... }
-//   * settings namespace 'dsh-speak' (installSettingsSection)
+//   * settings form projected from the host plugin's own Config export
+//     (settings namespace = the host entry id, see SETTINGS_NAMESPACES)
 //
 // The bundle is deliberately hand-written (no build step) and only uses
 // platform seed modules + official primitives (bundle-purity gate).
@@ -21,10 +22,16 @@ window.__ModuleLoader__.load({
   factory: require => {
     const module = { exports: {} }
     const React = require('react')
-    const { Button, DisclosureRow, IconPauseOutline16, Input } = require('@deepseek-ai/dsh-client-ui-primitives')
+    const { Button, DisclosureRow, IconPauseOutlineRegular, Input } = require('@deepseek-ai/dsh-client-ui-primitives')
     const CONTROL_PATH = '/dsh-speak/control'
     const SOCKET_PATH = '/dsh-speak/ws'
-    const SETTINGS_NAMESPACE = 'dsh-speak'
+    // Settings namespace(s) this card edits. On DSH >= 0.1.7 the settings form is
+    // projected from the HOST entry's own Config export, and the namespace is that
+    // entry's Loader id — there is no client-side namespace registration any more.
+    // `dsh-speak` is the id this package ships and documents; `speech-hook` is the
+    // id every 1.8.x profile patch (and this package's own bundle patch) used, so
+    // an upgraded profile keeps its settings page without an edit.
+    const SETTINGS_NAMESPACES = ['dsh-speak', 'speech-hook']
 
     // ---- locale copy (zh / en) -------------------------------------------
     const NS = 'dsh-speak'
@@ -165,14 +172,17 @@ window.__ModuleLoader__.load({
       todoWriteHint: 'Announces when the agent updates its todos.',
     }
 
-    module.exports.inject = ['slots', 'timer', 'settingsScope', 'locale']
+    module.exports.inject = ['slots', 'timer', 'configForms', 'locale']
     module.exports.apply = function apply(ctx) {
       ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-speak: dictionaries')
       const t = ctx.locale.bind(NS)
 
       let speechState = { speaking: false, sessionId: null, turn: null, messageId: null, source: null, queueLength: 0 }
       const listeners = new Set()
-      const settings = ctx.settingsScope.bind({ namespace: SETTINGS_NAMESPACE })
+      // The bound settings form, installed by the `whileServed` watch below: the
+      // configForms service is keyed by the HOST entry id, which is only knowable
+      // once the settings mirror reports which namespace the host actually serves.
+      let settings = null
       const e = React.createElement
       function IconVolume2({ size = 20, className }) {
         return e('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', className, 'aria-hidden': 'true' },
@@ -282,11 +292,14 @@ window.__ModuleLoader__.load({
             const payload = speaking ? { action } : { action, sessionId: props.sessionId, turn, messageId, text }
             void control(payload).catch(console.error).finally(() => setPending(false))
           },
-        }, speaking ? e(IconPauseOutline16) : e(IconVolume2))
+        }, speaking ? e(IconPauseOutlineRegular) : e(IconVolume2))
       }
+      // The card is only mounted while the host namespace is served (see the
+      // whileServed watch at the end of apply), so `settings` is bound by then;
+      // the guards keep a mount outside that window renderable instead of fatal.
       function useSettings() {
-        const [snapshot, setSnapshot] = React.useState(settings.getSnapshot())
-        React.useEffect(() => settings.subscribe(() => setSnapshot(settings.getSnapshot())), [])
+        const [snapshot, setSnapshot] = React.useState(settings ? settings.getSnapshot() : null)
+        React.useEffect(() => (settings ? settings.subscribe(() => setSnapshot(settings.getSnapshot())) : undefined), [])
         return snapshot
       }
       function Field({ label, hint, children, inline }) {
@@ -300,7 +313,18 @@ window.__ModuleLoader__.load({
         // 局部 state 缓冲，输入过程自由，onChange 里校验合法后才写配置。
         const [text, setText] = React.useState(String(value))
         React.useEffect(() => { setText(String(value)) }, [value])
-        return e(Field, { label: `${label}:`, hint }, e('div', { className: 'dsh-speak-input-row' }, e(Input, { id, value: text, disabled, inputMode: numeric ? 'numeric' : undefined, onChange: event => { setText(event.target.value); onChange(event.target.value) } })))
+        return e(Field, { label: `${label}:`, hint }, e('div', { className: 'dsh-speak-input-row' }, e(Input, {
+          id, value: text, disabled, inputMode: numeric ? 'numeric' : undefined,
+          onChange: event => {
+            const typed = event.target.value
+            setText(typed)
+            // A refused write (false) leaves the config untouched, so the buffer must
+            // fall back to the stored value — otherwise the input keeps showing a
+            // number that was never saved (the toggle controls self-correct because
+            // they render straight from the snapshot).
+            void Promise.resolve(onChange(typed)).then(ok => { if (ok === false) setText(String(value)) })
+          },
+        })))
       }
       function Options({ label, value, disabled, onChange, hint, options }) { return e(Field, { label, hint }, e('div', { className: 'dsh-speak-option-row' }, ...options.map(option => e(Button, { key: option.value, variant: value === option.value ? 'primary' : 'outline', size: 'sm', disabled, 'aria-pressed': value === option.value, onClick: () => onChange(option.value) }, option.label)))) }
       function MarkdownCleaning({ value, clean, disabled, set }) {
@@ -315,8 +339,21 @@ window.__ModuleLoader__.load({
       function SettingsCard() {
         // hooks must run unconditionally (before the ready-guard return)
         const [eventsOpen, setEventsOpen] = React.useState(false)
-        const snapshot = useSettings(); if (snapshot.status !== 'ready' || !snapshot.value) return null
-        const value = snapshot.value; const disabled = !snapshot.writable; const clean = value.cleanMarkdownFormatting !== false; const set = (field, next) => { void settings.set(field, next).catch(console.error) }
+        const snapshot = useSettings(); if (!snapshot || snapshot.status !== 'ready' || !snapshot.value) return null
+        const value = snapshot.value; const disabled = !snapshot.writable; const clean = value.cleanMarkdownFormatting !== false
+        // `set` resolves to the Host's answer so a control can react to a refusal:
+        // `false` means the write was rejected (e.g. a duplicated entry id — see the
+        // README troubleshooting table), and the mirror then reloads the old value.
+        const set = async (field, next) => {
+          try {
+            const saved = await settings.set(field, next)
+            if (!saved) console.warn('[dsh-speak] setting not saved:', field)
+            return saved
+          } catch (error) {
+            console.error('[dsh-speak] settings write failed:', field, error)
+            return false
+          }
+        }
         const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent || navigator.platform || '')
         return e('section', { 'aria-label': t('settingsAria') }, e('h3', null, t('settingsTitle')), e('p', null, t('settingsIntro')),
           e(Toggle, { label: t('masterSwitch'), value: value.enabled !== false, disabled, onChange: next => set('enabled', next), hint: t('masterSwitchHint') }),
@@ -350,7 +387,17 @@ window.__ModuleLoader__.load({
         document.head.appendChild(style); return () => style.remove()
       }, 'dsh-speak message action styles')
       ctx.slots.inject('conversation.chat.assistant-actions', () => ctx.slots.register({ name: 'conversation.chat.assistant-actions', id: 'speak', order: 5, label: 'Speak', locale: NS }, SpeakAction))
-      ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'speak', order: 25, label: () => t('nav'), locale: NS }, SettingsCard))
+      // The settings page is bound to whichever namespace the HOST actually
+      // serves, and exists only while one is served: `whileServed` runs once a
+      // listed namespace reaches the shared settings mirror (and withdraws the
+      // page when none is), so a deployment without the settings provider — or
+      // with an entry id this plugin does not know — shows no dead page.
+      ctx.effect(() => ctx.configForms.whileServed(SETTINGS_NAMESPACES, served => {
+        const namespace = SETTINGS_NAMESPACES.find(name => served.has(name))
+        if (namespace === undefined) return () => {}
+        settings = ctx.configForms.get(namespace)
+        return ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'speak', order: 25, label: () => t('nav'), locale: NS }, SettingsCard))
+      }), 'dsh-speak settings page')
     }
     return module.exports
   },

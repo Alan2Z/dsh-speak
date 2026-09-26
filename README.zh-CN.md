@@ -82,34 +82,52 @@ harness 事件（DSH 会话事件 / Claude Code Stop hook / 任意方式）
 
 ### DSH 版本
 
-- 已在 **DSH 0.1.5-rc.1** 上验证。0.1.1 之后有两处 host/客户端 API 变更，本插件
-  1.8.0 均已适配：
-  - `@deepseek-ai/dsh-settings` 删除了 `installSettingsSection` /
-    `settingsNamespace` 两个辅助导出——插件改为通过 `settings` **服务**注册
-    namespace（旧版本上原实现会让宿主启动直接崩掉：
-    `settingsNamespace is not a function`）。没有 settings provider 时，插件照旧
-    按 patch `config` 工作。
-  - Session snapshot 不再携带会话视图（Conversation target）数据——🔊 按钮改为
-    通过 Chat 目标的 hook `useChat` 取被点击消息的文本。
+- 已在 **DSH 0.1.7-rc.2** 上验证。0.1.1 之后有两轮 host/客户端 API 变更，本插件均已适配：
+  - **0.1.7 把 settings provider API 换成了 Config 投影**：settings 服务改为读取每个
+    已激活 Loader 条目自己导出的 `Config` schema，把其中的 *volatile* 字段投影成设置
+    界面（宿主侧 `ctx.settings.describe()`，浏览器侧 `ctx.configForms`）。1.6.0–1.8.x
+    使用的 `settings.register(namespace, schema, { base })` 已删除，浏览器服务
+    `settingsScope` 也被 `configForms` 取代。因此本插件把 schema 作为 `Config` 导出，
+    而设置 namespace 就是它的**条目 id**（`dsh-speak`；1.8.x 遗留的 `speech-hook`
+    条目 id 依然可以绑定，见下）。
+  - **0.1.2** 起 Session snapshot 不再携带会话视图（Conversation target）数据——
+    🔊 按钮改为通过 Chat 目标的 hook `useChat` 取被点击消息的文本；同一版本还删除了
+    `@deepseek-ai/dsh-settings` 的 `installSettingsSection` / `settingsNamespace`。
 - 宿主要求声明在 dsh-market 实际读取的位置：`package.json` 的 `engines.dsh`
-  （`>=0.1.5-rc.1`）。市场卡片与「适配当前 DSH」筛选读的正是这个字段，因此只有在
+  （`>=0.1.7-rc.2`）。市场卡片与「适配当前 DSH」筛选读的正是这个字段，因此只有在
   某个宿主版本上实测通过后，这个下限才会移动。
+- 1.8.2 依赖 0.1.7 引入的设置模型：在更老的宿主上浏览器半侧会一直等待
+  `configForms` 服务。DSH ≤ 0.1.6 请用 1.8.1。
 
 ## 安装与快速开始
 
 ### DSH — 方式 A：npm 插件（推荐）
 
 ```powershell
-# 1. 把插件装进你的 web profile（会写入 ~/.dsh/profiles/web/package.json 的 dependencies）
+# 1. 把插件装进你的 web profile（会写入 ~/.dsh/profiles/web/package.json 的
+#    dependencies **和** dsh.profile.bundles）
 dsh plugin --profile web add dsh-speak
 
-# 2. 在 ~/.dsh/profiles/web/cordis.patch.yml 里注册（npm 包直接用包名，无需 file:/// URL）：
-#    - insert:
-#        - id: speech-hook
-#          name: 'dsh-speak'
+# 2. 到此为止——包自带 bundle patch，条目（id: dsh-speak）由它注册。
+#    不要再手写一行 insert：同一个条目注册两次会让 id 不唯一，DSH 的 config-editor
+#    随后会拒绝每一次设置写入：
+#      settings/rejected: Configuration for "dsh-speak" is overridden by a home patch or command-line overlay
+#    （语音照常工作，只有设置页静默弹回——所以特别难查。）
+#
+#    如果仍想在 YAML 里固定选项，只加这一行**顶层行**（设置页就地改写它；
+#    config 放顶层行才是编辑器支持的形状，见「DSH 插件配置」）：
+#    - id: dsh-speak
+#      name: 'dsh-speak'
+#      config: {}
+#
+#    0.1.7 起条目 id 就是设置 namespace：你的选项会以这个 key 存在同一个文件里。
+#    1.8.x 遗留的 id（speech-hook）继续可用——浏览器半侧两个 id 都认。
 
 # 3. 重启 DSH web 应用 — 之后回复会被自动播报
 ```
+
+> 在应用内插件市场安装是**同一条路径**（会把包加进 `dsh.profile.bundles`）；
+> 只有下面两种手动安装才需要手写行。**一个 profile 只能有一种注册方式**，绝不能两种都有。
 
 > **没有 pnpm？** `dsh plugin` 内部转发给 pnpm，并非所有机器都装了。可以用 npm
 > 直接完成同样的安装：
@@ -123,6 +141,10 @@ dsh plugin --profile web add dsh-speak
 > ```bash
 > npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
 > ```
+>
+> 单纯 `npm install` **不会**注册插件：要么把包名加进
+> `~/.dsh/profiles/web/package.json` 的 `dsh.profile.bundles`，要么用文件安装那两行
+> ——不要两者都做。
 
 引擎随包分发（`node_modules/dsh-speak/engine/`），无需额外拷贝。
 
@@ -166,8 +188,11 @@ npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
 
 # 2. 在 ~/.dsh/profiles/web/cordis.patch.yml 末尾注册（裸包名即可，无需 file:/// URL）：
 #    - insert:
-#        - id: speech-hook
+#        - id: dsh-speak
 #          name: 'dsh-speak'
+#    - id: dsh-speak
+#      name: 'dsh-speak'
+#      config: {}
 
 # 3. 无需重启——patch 监视器会热更新；回复在节流后（约 1.5 秒）自动播报；
 #    带工具调用的回复会在回合结束时补播最终回复
@@ -247,7 +272,8 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
 
 ### DSH 插件配置
 
-**两种改法，任选其一**（改 UI 或改 YAML 都写进同一个 settings 文档，彼此同步）：
+**两种改法，任选其一**（改 UI 或改 YAML 都落进同一份 profile patch——设置服务把 UI 的
+修改写回它读到的那一行，彼此同步）：
 
 1. **Web UI（1.7.0，推荐）**：设置 → dsh-speak 设置独立设置页。所有配置项都能直接改并
    保存（`dsh --dump-config` 可见、按 profile 隔离、升级不丢）。
@@ -255,41 +281,63 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
 
 ```yaml
 # ~/.dsh/profiles/web/cordis.patch.yml
+# 必须写成两行：insert 行负责“提供条目”，顶层行承载设置页要改写的 config。
+# DSH 的 config-editor 只会就地改写顶层行；config 嵌在 insert 里时，UI 会接受修改、
+# 运行中的插件也会立刻生效，但这次写入随后会被回滚——下次启动 dsh 时值就悄悄变回去了。
 - insert:
-    - id: speech-hook
+    - id: dsh-speak           # 0.1.7 起条目 id 就是设置 namespace
       name: 'dsh-speak'
-      config:
-        enabled: true           # 总开关：false 时完全不播报
-        automaticSpeech: true   # 自动朗读最终回复
-        queueAllMessages: false # true = 所有 assistant 消息立即入队朗读（中间消息也读）
-        replayFullRead: false   # true = 手动重播跳过超长文本截断，完整朗读
-        cleanMarkdownFormatting: true # Markdown 转自然语音
-        readInlineCode: true    # 朗读行内代码（去掉反引号）
-        codeBlocks: smart       # all | smart | replace（围栏代码块）
-        codeBlockMaxChars: 300  # smart 模式下的代码块字数上限
-        codeBlockReplacementText: 'You can see the code in our history.' # replace 时的替代文本
-        throttleMs: 1500        # 播报前的合并延迟（毫秒）
-        engine: ''              # 引擎路径覆盖；'' = 自动解析
-        announceApprovals: true # 播报审批请求
-        announceQuestions: true # 播报 ask_user_question 提问内容
-        stripApprovalPrefix: true  # 剥离审批原因里的 "escalate sandbox to ...: " 前缀
-        questionGapMs: 2000      # 多个提问播报之间的停顿（毫秒）
-        longTextMode: message   # message | heading（念最大字号 markdown 标题）
-        longTextMessage: '本次播报内容较长，请自行阅读。' # message 模式下的固定提示语
-        maxChars: 300           # 引擎单次朗读字数上限（macOS 默认 0 = 不限）
-        volume: 50              # 仅 Windows
-        rate: 0                 # 0 = 引擎默认（Windows SAPI 刻度 / macOS wpm）
-        # —— 可选事件播报（1.6.0，默认全关）——
-        announceTurnEnd: false     # 回合结束（"第 N 轮对话完成"）
-        announceCommandDone: false # 命令完成/失败（command/done）
-        announceGoalChange: false  # 目标创建/更新/完成（goal/change）
-        announceToolErrors: false  # 工具调用出错时播报（英文详情截掉，tool/result）
-        announceTodoWrite: false   # 待办列表更新（todo/write）
+- id: dsh-speak
+  name: 'dsh-speak'
+  config:
+    enabled: true           # 总开关：false 时完全不播报
+    automaticSpeech: true   # 自动朗读最终回复
+    queueAllMessages: false # true = 所有 assistant 消息立即入队朗读（中间消息也读）
+    replayFullRead: false   # true = 手动重播跳过超长文本截断，完整朗读
+    cleanMarkdownFormatting: true # Markdown 转自然语音
+    readInlineCode: true    # 朗读行内代码（去掉反引号）
+    codeBlocks: smart       # all | smart | replace（围栏代码块）
+    codeBlockMaxChars: 300  # smart 模式下的代码块字数上限
+    codeBlockReplacementText: 'You can see the code in our history.' # replace 时的替代文本
+    throttleMs: 1500        # 播报前的合并延迟（毫秒）
+    engine: ''              # 引擎路径覆盖；'' = 自动解析
+    announceApprovals: true # 播报审批请求
+    announceQuestions: true # 播报 ask_user_question 提问内容
+    stripApprovalPrefix: true  # 剥离审批原因里的 "escalate sandbox to ...: " 前缀
+    questionGapMs: 2000      # 多个提问播报之间的停顿（毫秒）
+    longTextMode: message   # message | heading（念最大字号 markdown 标题）
+    longTextMessage: '本次播报内容较长，请自行阅读。' # message 模式下的固定提示语
+    maxChars: 300           # 引擎单次朗读字数上限（macOS 默认 0 = 不限）
+    volume: 50              # 仅 Windows
+    rate: 0                 # 0 = 引擎默认（Windows SAPI 刻度 / macOS wpm）
+    # —— 可选事件播报（1.6.0，默认全关）——
+    announceTurnEnd: false     # 回合结束（"第 N 轮对话完成"）
+    announceCommandDone: false # 命令完成/失败（command/done）
+    announceGoalChange: false  # 目标创建/更新/完成（goal/change）
+    announceToolErrors: false  # 工具调用出错时播报（英文详情截掉，tool/result）
+    announceTodoWrite: false   # 待办列表更新（todo/write）
 ```
 
 > 解析顺序：schema 默认值 → patch `config` → UI 用户设置。写进 YAML 的字段
 > 同样出现在 UI 中。平台差异：`maxChars` 在 macOS 默认 0（`say` 无上限），
 > Windows 默认 300（SAPI 安全上限）。
+>
+> 超出上表范围的取值（`volume` 0-100、Windows `rate` -10..10）会在送进引擎前被**钳制**
+> ——SAPI 遇到越界的 `Volume`/`Rate` 会抛异常，表现就是"没声音且没有任何提示"。被钳制
+> 时会记一行日志：`settings 值超出范围，已钳制: <字段> <给出值> -> <实际值>`。
+> 显式写 `0` 一律尊重原意（`volume: 0` 静音、`maxChars: 0` 不限长、`throttleMs: 0` 不合并）。
+
+> **`config` 必须写在顶层行上。** 这不是风格问题：如果把 `config:` 嵌在 `insert`
+> 行里，设置页照样能显示、改完运行中的插件也立刻生效，但 DSH 的 config-editor
+> 无法就地改写那一行——它会追加一个顶层行再把写入回滚，于是下次启动 dsh 时值会
+> 悄悄变回去。可以用 `python scripts/settings-ui-check.py` 验证（它会断言写入真的
+> 落进了 profile patch）。
+
+> **从 1.8.x 升级：** 直接在设置页里改，或把旧的 `config:` 块挪到新的顶层行上（形状见上）。
+> 0.1.7 之前选项存在 `~/.dsh/settings.yaml` 的 `dsh-speak:` 段里；该文件已被 DSH 迁移为
+> `settings.yaml.imported`，而段名对不上任何 Loader 条目的段（1.8.x 是在代码里注册
+> namespace，所以 `dsh-speak:` 谁也匹配不到）会被留在原地。如果你改过默认值，把那些值
+> 抄进上面那个 `config:` 块即可——现在 DSH 找的 key 就是条目 id（`dsh-speak`）。
 
 #### 选项说明
 
@@ -362,11 +410,11 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
    > 或跑 `node scripts/test-engine-static.js`。
 
    ```yaml
-   - insert:
-       - id: speech-hook
-         name: 'dsh-speak'
-         config:
-           engine: 'C:/Users/<你>/.dsh/hooks/my-speak.ps1'   # macOS 用 ~/.dsh/hooks/my-speak.sh
+   # 改的是顶层行（不是 insert 行——见「DSH 插件配置」）
+   - id: dsh-speak
+     name: 'dsh-speak'
+     config:
+       engine: 'C:/Users/<你>/.dsh/hooks/my-speak.ps1'   # macOS 用 ~/.dsh/hooks/my-speak.sh
    ```
 
    插件按 `config.engine` → 包内引擎 → `~/.dsh/hooks/` 的顺序解析引擎，所以你的副本
@@ -386,6 +434,10 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
 | 听到 `工具调用出错：Error: cannot read …` | "是否中文"的详情判据只检查"含有汉字"，英文报错里夹着中文目录名就能骗过它（1.8.0 引入的回归） | 1.8.0 已修——详情需满足"汉字数量多于拉丁字母数量" |
 | 含大量 emoji 的文本静默 | SAPI 遇到 emoji 会静默失败 | 引擎已自动剥离 |
 | 插件加载失败 | 插件名用了 Windows 原始路径 | 改用 `file:///C:/…` URL 形式（安装脚本会自动处理） |
+| 升级到 1.8.2 后设置页不出现 | profile patch 那行写着 `disabled: true`，或条目 id 既不是 `dsh-speak` 也不是旧 id `speech-hook` | 去掉 `disabled`，并把 `id` 改成两者之一 |
+| 设置页能开、但每次改动都被弹回 | DSH < 0.1.7（`configForms` 已取代 `settingsScope`） | 升级 DSH，或继续用 dsh-speak 1.8.1 |
+| DSH 0.1.7+ 上每次改动都被弹回，且插件日志出现 `已有实例在运行` | 条目被注册了**两次**（例如包既在 `dsh.profile.bundles` 里、又手写了一行 `insert:`）：id 不再唯一，config-editor 会拒绝每次写入（`settings/rejected: Configuration for "dsh-speak" is overridden by a home patch or command-line overlay`）；语音照常工作，所以特别难查 | 只保留一种注册方式（见「方式 A」），然后重启 |
+| 改完立刻生效，但重启后变回旧值 | `config:` 块嵌在 profile patch 的 `insert:` 行里——DSH 的 config-editor 只会就地改写**顶层**行，嵌套写入会被静默回滚（仍然回 `ok: true`） | 按「DSH 插件配置」把 `config` 放到顶层行；`python scripts/settings-ui-check.py` 会断言写入真的落盘 |
 | macOS：音色突然变成"婷婷" | 打开过"朗读内容 / Siri 声音"设置面板导致系统朗读声音漂移 | 系统设置 → 辅助功能 → 阅读与朗读 → 系统声音 → ⓘ 入口重新选择 |
 | macOS：在 `/tmp` 找不到日志 | `os.tmpdir()` 是 `/var/folders/.../T`，不是 `/tmp` | 日志在 `$TMPDIR/dsh-speech-hook.log` |
 
@@ -400,7 +452,7 @@ engine/                  与 harness 无关的语音引擎（PowerShell + SAPI5 
   speech-summary.ps1     阻塞式回复总结播报
 adapters/
   dsh/                   DSH web 插件 + 一键安装脚本
-    speech-hook.js       会话事件触发器（节流/取消 + 可选事件 + FIFO 语音队列 + WebSocket + settings 注册）
+    speech-hook.js       会话事件触发器（节流/取消 + 可选事件 + FIFO 语音队列 + WebSocket + Config 投影的设置表单）
     install.ps1          拷贝 + 注册 + 备份
   claude-code/
     stop-hook.ps1        Claude Code Stop hook 触发器
@@ -413,7 +465,7 @@ scripts/                 测试 + 手动开发辅助脚本（不随 npm 包发�
   test-engine-longtext.js  两个引擎的长文守卫契约（speak.ps1 -DryRun / speak.sh 的 perl）
   test-speech-hook.js      宿主插件：事件触发、队列、工具出错详情过滤
   test-client-bundle.js    浏览器 bundle：slot 注册 + 组件渲染
-  test-settings-integration.js  settings 服务接线 + 已删除 API 的回归守卫
+  test-settings-integration.js  Config 投影接线（volatile 引用 + 实时写入）+ 已删除 API 回归守卫
   session-log-dump.js      读取 DSH 会话日志（手动：看引擎究竟收到了什么文本）
   settings-ui-check.py     Playwright UI 检查（手动：需要运行中且已鉴权的 dsh）
   dsh-events-check.py      Playwright 折叠行检查（手动）
