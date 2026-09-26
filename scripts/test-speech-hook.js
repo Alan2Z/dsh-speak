@@ -341,13 +341,16 @@ async function main() {
   await t12.flush(20)
   const ps12 = engineSpawn()
   assert.ok(ps12, `manual play spawned ${ENGINE_CMD}`)
-  assert.strictEqual(flagValue(ps12.args, FLAG.fullRead), '1',
-    `replayFullRead on → ${FLAG.fullRead} 1: ${JSON.stringify(ps12.args)}`)
   if (IS_WIN) {
+    assert.strictEqual(flagValue(ps12.args, FLAG.fullRead), '1',
+      `replayFullRead on → -FullRead 1: ${JSON.stringify(ps12.args)}`)
     // Windows 语速透传 cfg.rate（默认 0 = SAPI 正常），不再替换成 1
     assert.strictEqual(flagValue(ps12.args, FLAG.rate), '0',
       `default rate must pass 0 (SAPI normal), got ${JSON.stringify(ps12.args)}`)
   } else {
+    // macOS 的 -F 是裸开关（engine/speak.sh 的 usage 写作 [-F]，`F) FULL_READ=1`），不带取值
+    assert.ok(ps12.args.includes(FLAG.fullRead),
+      `macOS passes a bare -F for full read: ${JSON.stringify(ps12.args)}`)
     // macOS: 0 = 引擎默认（语音自带 175 wpm），所以不传 -r
     assert.ok(!ps12.args.includes(FLAG.rate), `macOS must omit -r at the default rate: ${JSON.stringify(ps12.args)}`)
   }

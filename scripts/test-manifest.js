@@ -63,11 +63,13 @@ assert.ok(/'speech-hook'/.test(namespaces[1]), 'the legacy speech-hook entry id 
 // accepted by the settings page, applied to the running plugin, and then rolled
 // back on disk — the option silently reverts on the next boot. Shipping both rows
 // makes the first UI write persist. See the comment inside cordis.patch.yml.
+// `\r?` tolerates a core.autocrlf=true checkout: this file arrives CRLF there
+// and .gitattributes pins LF only for *.sh, so the row assertion must not care.
 assert.ok(/^ {4}- id: dsh-speak$/m.test(patch),
   'cordis.patch.yml must keep the insert row that provides the entry')
 assert.ok(/^- id: dsh-speak$/m.test(patch),
   'cordis.patch.yml must keep the editable TOP-LEVEL dsh-speak row')
-assert.ok(/- id: dsh-speak\n {2}name: dsh-speak\n {2}config:/m.test(patch),
+assert.ok(/- id: dsh-speak\r?\n {2}name: dsh-speak\r?\n {2}config:/m.test(patch),
   'the top-level dsh-speak row must carry the `config` the settings page edits')
 console.log('dsh.bundle.patch: entry + editable settings row, dsh-speak ✓')
 
