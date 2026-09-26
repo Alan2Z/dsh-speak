@@ -108,6 +108,29 @@ function applyWith(config) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Platform-aware engine expectations. The queue spawns `powershell.exe` on Windows
+// (flags -MaxChars / -FullRead / -Rate / -Volume / -CleanMarkdownFormatting /
+// -ReadInlineCode) and `/bin/bash engine/speak.sh` on macOS (-m / -F / -r / -C / -I,
+// where a flag is present only when it is needed: `-F` marks full read and `-r` is
+// passed for a positive rate only; `say` follows the system volume, so volume is
+// never passed). Asserting Windows argv on macOS is how a green-on-Windows test
+// suite turns red on a Mac.
+// ---------------------------------------------------------------------------
+const IS_WIN = process.platform === 'win32'
+const ENGINE_CMD = IS_WIN ? 'powershell.exe' : '/bin/bash'
+const FLAG = {
+  maxChars: IS_WIN ? '-MaxChars' : '-m',
+  fullRead: IS_WIN ? '-FullRead' : '-F',
+  rate: IS_WIN ? '-Rate' : '-r',
+  cleanMarkdown: IS_WIN ? '-CleanMarkdownFormatting' : '-C',
+  readInlineCode: IS_WIN ? '-ReadInlineCode' : '-I',
+}
+/** The engine process the queue spawned for the platform this test runs on. */
+function engineSpawn() { return spawned.find(s => s.cmd === ENGINE_CMD) || spawned[0] }
+/** argv value of one engine flag, or undefined when the flag is absent. */
+function flagValue(args, name) { const i = args.indexOf(name); return i < 0 ? undefined : args[i + 1] }
+
 async function main() {
   // ---- 1. default mode: optional events + throttled final reply ----
   const t1 = applyWith({ announceTurnEnd: true, announceCommandDone: true, announceGoalChange: true, announceToolErrors: true, announceTodoWrite: true, throttleMs: 10 })
@@ -190,14 +213,15 @@ async function main() {
     `single question with numbered options: ${JSON.stringify(announced)}`)
   assert.ok(!announced.includes('你需要哪个方案？'), `question text must not repeat at turn/end: ${JSON.stringify(announced)}`)
 
-  // ---- 9. Windows spawn passes booleans as 1/0 (PowerShell [bool] rejects "true") ----
+  // ---- 9. engine booleans are passed as 1/0 on both platforms (PowerShell [bool]
+  // rejects "true"; speak.sh compares against '1') ----
   const t9 = applyWith({ throttleMs: 10 })
   t9.fireEvent('assistant/message', { turn: 13, step: 1, message: { id: 'b1', content: [{ type: 'text', text: '布尔参数测试' }] } })
   await t9.flush(30)
-  const ps = spawned.find(s => s.cmd === 'powershell.exe')
-  assert.ok(ps, 'powershell spawned')
+  const ps = engineSpawn()
+  assert.ok(ps, `${ENGINE_CMD} spawned`)
   const psArgs = ps.args
-  for (const flag of ['-CleanMarkdownFormatting', '-ReadInlineCode']) {
+  for (const flag of [FLAG.cleanMarkdown, FLAG.readInlineCode]) {
     const idx = psArgs.indexOf(flag)
     assert.ok(idx >= 0 && (psArgs[idx + 1] === '1' || psArgs[idx + 1] === '0'),
       `${flag} must be 1/0, got ${JSON.stringify(psArgs.slice(idx, idx + 2))}`)
@@ -315,23 +339,32 @@ async function main() {
   const t12 = applyWith({ replayFullRead: true, throttleMs: 10 })
   await controlPlay(t12.__routes, { action: 'play', text: '重播完整朗读测试' })
   await t12.flush(20)
-  const ps12 = spawned.find(s => s.cmd === 'powershell.exe')
-  assert.ok(ps12, 'manual play spawned powershell')
-  const idx12 = ps12.args.indexOf('-FullRead')
-  assert.ok(idx12 >= 0 && ps12.args[idx12 + 1] === '1', `replayFullRead on → -FullRead 1: ${JSON.stringify(ps12.args.slice(idx12, idx12 + 2))}`)
-  // Windows 语速透传 cfg.rate（默认 0 = SAPI 正常），不再替换成 1
-  const rateIdx12 = ps12.args.indexOf('-Rate')
-  assert.ok(rateIdx12 >= 0 && ps12.args[rateIdx12 + 1] === '0', `default rate must pass 0 (SAPI normal), got ${JSON.stringify(ps12.args.slice(rateIdx12, rateIdx12 + 2))}`)
+  const ps12 = engineSpawn()
+  assert.ok(ps12, `manual play spawned ${ENGINE_CMD}`)
+  assert.strictEqual(flagValue(ps12.args, FLAG.fullRead), '1',
+    `replayFullRead on → ${FLAG.fullRead} 1: ${JSON.stringify(ps12.args)}`)
+  if (IS_WIN) {
+    // Windows 语速透传 cfg.rate（默认 0 = SAPI 正常），不再替换成 1
+    assert.strictEqual(flagValue(ps12.args, FLAG.rate), '0',
+      `default rate must pass 0 (SAPI normal), got ${JSON.stringify(ps12.args)}`)
+  } else {
+    // macOS: 0 = 引擎默认（语音自带 175 wpm），所以不传 -r
+    assert.ok(!ps12.args.includes(FLAG.rate), `macOS must omit -r at the default rate: ${JSON.stringify(ps12.args)}`)
+  }
   await t12.finishAll()
   await t12.flush(20)
 
   const t13 = applyWith({ replayFullRead: false, throttleMs: 10 })
   await controlPlay(t13.__routes, { action: 'play', text: '重播走heading' })
   await t13.flush(20)
-  const ps13 = spawned.find(s => s.cmd === 'powershell.exe')
-  assert.ok(ps13, 'manual play spawned powershell (off)')
-  const idx13 = ps13.args.indexOf('-FullRead')
-  assert.ok(idx13 >= 0 && ps13.args[idx13 + 1] === '0', `replayFullRead off → -FullRead 0: ${JSON.stringify(ps13.args.slice(idx13, idx13 + 2))}`)
+  const ps13 = engineSpawn()
+  assert.ok(ps13, `manual play spawned ${ENGINE_CMD} (off)`)
+  if (IS_WIN) {
+    assert.strictEqual(flagValue(ps13.args, FLAG.fullRead), '0',
+      `replayFullRead off → -FullRead 0: ${JSON.stringify(ps13.args)}`)
+  } else {
+    assert.ok(!ps13.args.includes(FLAG.fullRead), `macOS omits -F when replayFullRead is off: ${JSON.stringify(ps13.args)}`)
+  }
   await t13.finishAll()
   await t13.flush(20)
 
@@ -367,16 +400,23 @@ async function main() {
   // A user's 0 is meaningful (volume 0 = silence, maxChars 0 = unlimited) and used to
   // be swallowed by `|| fallback`; an out-of-range SAPI Rate/Volume makes speak.ps1
   // throw, so it must be clamped before it reaches the engine.
-  const t15 = applyWith({ throttleMs: 10, volume: 0, maxChars: 0, rate: process.platform === 'win32' ? 175 : 0 })
+  const t15 = applyWith({ throttleMs: 10, volume: 0, maxChars: 0, rate: IS_WIN ? 175 : 0 })
   t15.fireEvent('assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: '数值规整检查。' }] } })
   await t15.flush(120)
-  const engineArgs = (spawned.find(s => s.cmd === 'powershell.exe') || spawned[0] || {}).args
-  assert.ok(Array.isArray(engineArgs), `a speech process was spawned: ${JSON.stringify(spawned.map(s => s.cmd))}`)
-  const argOf = flag => engineArgs[engineArgs.indexOf(flag) + 1]
-  assert.strictEqual(argOf('-Volume'), '0', `explicit volume 0 must reach the engine, got ${argOf('-Volume')}`)
-  assert.strictEqual(argOf('-MaxChars'), '0', `explicit maxChars 0 must reach the engine, got ${argOf('-MaxChars')}`)
-  if (process.platform === 'win32') {
-    assert.strictEqual(argOf('-Rate'), '10', `out-of-range SAPI rate must clamp to 10, got ${argOf('-Rate')}`)
+  const spawnedEngine = engineSpawn()
+  assert.ok(spawnedEngine && Array.isArray(spawnedEngine.args),
+    `a speech process was spawned: ${JSON.stringify(spawned.map(s => s.cmd))}`)
+  const engineArgs = spawnedEngine.args
+  assert.strictEqual(flagValue(engineArgs, FLAG.maxChars), '0',
+    `explicit maxChars 0 must reach the engine, got ${flagValue(engineArgs, FLAG.maxChars)}`)
+  if (IS_WIN) {
+    assert.strictEqual(flagValue(engineArgs, '-Volume'), '0', `explicit volume 0 must reach the engine, got ${flagValue(engineArgs, '-Volume')}`)
+    assert.strictEqual(flagValue(engineArgs, '-Rate'), '10', `out-of-range SAPI rate must clamp to 10, got ${flagValue(engineArgs, '-Rate')}`)
+  } else {
+    // macOS has no volume flag (`say` follows the system volume) and rate 0 means
+    // "engine default", so neither is passed.
+    assert.ok(!engineArgs.includes('-Volume'), 'macOS must not pass a volume flag')
+    assert.ok(!engineArgs.includes('-r'), 'macOS rate 0 = engine default: no -r flag')
   }
   await t15.finishAll()
 
