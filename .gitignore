@@ -19,3 +19,7 @@ Thumbs.db
 # output of manual dev helpers (regenerated on every run)
 scripts/settings-ui-check.png
 scripts/_recon.png
+
+# local-only project memory (never published, never committed)
+DSH_MEMORY.md
+RELEASE-NOTES-*.md
