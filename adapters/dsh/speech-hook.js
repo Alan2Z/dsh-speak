@@ -69,6 +69,44 @@ function resolveEngine(override) {
 // `maxChars` defaults to 0 (unlimited) there; Windows keeps the safe 300.
 const DEFAULT_MAX_CHARS = process.platform === 'darwin' ? 0 : 300
 
+/**
+ * 为「回合完成」播报生成一句话摘要：剥 markdown、压空白、截前 maxLen 字，
+ * 尽量在句末标点处收尾（找不到合适边界就取前 maxLen 字 + 省略号）。
+ * 纯 JS 实现（引擎侧的清洗管线在 PowerShell 里，这里只要「够用」：链接取
+ * 文字、去代码围栏、去强调/标题符号）。
+ */
+function summarizeForSpeech(text, maxLen) {
+  if (!text) return ''
+  let s = String(text)
+  // 围栏代码块整块去掉（摘要里不需要代码）
+  s = s.replace(/```[\s\S]*?```/g, ' ')
+  s = s.replace(/`([^`]*)`/g, '$1')
+  // 链接取文字部分，去 URL
+  s = s.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+  s = s.replace(/https?:\/\/\S+/g, ' ')
+  // 去标题符号、列表标记、引用、表格行（JS 的多行标志只能写在结尾，不能用 (?m)）
+  s = s.replace(/^\s{0,3}(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s?)/gm, ' ')
+  s = s.replace(/^\s*\|.*\|\s*$/gm, ' ')
+  // 去加粗/斜体/删除线标记
+  s = s.replace(/(\*\*|__|~~)(.*?)\1/g, '$2')
+  s = s.replace(/[*_~]+/g, '')
+  s = s.replace(/\s+/g, ' ').trim()
+  if (!s) return ''
+  if (s.length <= maxLen) return s
+  // 在 maxLen 内找最后一个句末标点收尾。句末判定与引擎侧（speak.ps1）同构：
+  //   * 全角 。！？；… 无条件算句末（中文标点后直接跟下一句是常态，不能要求空白）；
+  //   * 半角 .!?; 只在后面跟空白或右引号/右括号时才算，否则 "0.1.2"、"file.txt"、
+  //     "e.g." 里的小数点/扩展名会被误当句子结尾。
+  const head = s.slice(0, maxLen + 10)
+  const enders = [...head.matchAll(/(?:[。！？；…]|[.!?;](?=[\s"”’）】」』)\]}]))/g)].map(x => x.index + 1).filter(i => i <= maxLen)
+  if (enders.length > 0 && enders[enders.length - 1] >= Math.floor(maxLen / 2)) {
+    return s.slice(0, enders[enders.length - 1]).trim()
+  }
+  return s.slice(0, maxLen) + '……'
+}
+
+
+
 // ---------------------------------------------------------------------------
 // Settings (DSH >= 0.1.7: this module's own exported `Config` is the form)
 // ---------------------------------------------------------------------------
@@ -120,6 +158,7 @@ const SCHEMA_DEFAULTS = {
   volume: 50,
   rate: 0,
   announceTurnEnd: false,
+  speakTurnEndSummary: false,
   announceCommandDone: false,
   announceGoalChange: false,
   announceToolErrors: false,
@@ -182,6 +221,7 @@ function resolveConfig(value) {
       ? configNumber('rate', value.rate, 0, 0, Number.MAX_SAFE_INTEGER)
       : configNumber('rate', value.rate, 0, -10, 10),
     announceTurnEnd: value.announceTurnEnd === true,
+    speakTurnEndSummary: value.speakTurnEndSummary === true,
     announceCommandDone: value.announceCommandDone === true,
     announceGoalChange: value.announceGoalChange === true,
     announceToolErrors: value.announceToolErrors === true,
@@ -264,6 +304,7 @@ function buildConfig() {
       volume: z.natural().default(50).volatile(),
       rate: z.number().default(0).volatile(),
       announceTurnEnd: z.boolean().default(false).volatile(),
+      speakTurnEndSummary: z.boolean().default(false).volatile(),
       announceCommandDone: z.boolean().default(false).volatile(),
       announceGoalChange: z.boolean().default(false).volatile(),
       announceToolErrors: z.boolean().default(false).volatile(),
@@ -617,7 +658,15 @@ module.exports = {
           const data = event.data
           const prefix = data && data.turn != null ? `第 ${data.turn} 轮对话` : '本轮对话'
           const kind = data && data.reason && data.reason.kind
-          const text = ({ completed: prefix + '完成', aborted: prefix + '中断', interrupted: prefix + '中断', blocked: prefix + '被阻塞', error: prefix + '异常结束', 'max-tokens': prefix + '异常结束' })[kind] || prefix + '结束'
+          const base = ({ completed: prefix + '完成', aborted: prefix + '中断', interrupted: prefix + '中断', blocked: prefix + '被阻塞', error: prefix + '异常结束', 'max-tokens': prefix + '异常结束' })[kind] || prefix + '结束'
+          // 完成时带一句话摘要（speakTurnEndSummary 开启时）：取本回合的回复
+          // 正文，剥 markdown 后截前 60 字、在句末标点收尾，念成
+          // 「第 N 轮对话完成：<摘要>」。正文已被自动朗读过时不重复念。
+          let text = base
+          if (kind === 'completed' && cfg.speakTurnEndSummary && lastText && lastText !== lastSpokenText) {
+            const summary = summarizeForSpeech(lastText, 60)
+            if (summary) text = base + '：' + summary
+          }
           enqueue(hostItem('turn/end', session, event, text, null))
           return
         }
