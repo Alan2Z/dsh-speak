@@ -47,7 +47,10 @@ param(
     [string]$FullRead = '0',
     # 只把「将要朗读的文本」按 UTF-8 写到 stdout、完全不出声（调试清洗与长文
     # 守卫用；正常调用无需传，插件不会传）
-    [string]$DryRun = '0'
+    [string]$DryRun = '0',
+    # 指定音色（嗓音全名，见 GetInstalledVoices().VoiceInfo.Name）。留空则沿用
+    # 内置策略：优先 Natural/Online 的中文嗓，否则任意中文嗓。
+    [string]$Voice = ''
 )
 
 $cleanMarkdown = $CleanMarkdownFormatting -in @('1', 'true', 'yes', 'on')
@@ -174,14 +177,27 @@ Add-Type -AssemblyName System.Speech
 $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
 $synth.Volume = $Volume
 
-# prefer a zh natural voice (NaturalVoiceSAPIAdapter-registered), fall back to any zh
-$voices = $synth.GetInstalledVoices()
-$voice = $voices | Where-Object {
-    $_.VoiceInfo.Culture.Name -like 'zh*' -and
-    ($_.VoiceInfo.Name + ' ' + $_.VoiceInfo.Description) -match 'Natural|Online'
-} | Select-Object -First 1
-if (-not $voice) { $voice = $voices | Where-Object { $_.VoiceInfo.Culture.Name -like 'zh*' } | Select-Object -First 1 }
-if ($voice) { $synth.SelectVoice($voice.VoiceInfo.Name) }
+# 注意：PowerShell 变量名大小写不敏感，内部变量绝不能与参数 $Voice 仅差大小写
+# （$voice 会自赋值覆盖参数 $Voice —— 正是脚本头部注释记过的那个坑）。
+# 指定音色优先：$PickedVoice 命中即用它，否则沿用「自然中文嗓 → 任意中文嗓」策略。
+$installed = $synth.GetInstalledVoices()
+$pickedVoice = $null
+$wantedName = ''
+if ($Voice) { $wantedName = [string]$Voice }
+$wantedName = $wantedName.Trim()
+if ($wantedName) {
+    $pickedVoice = $installed | Where-Object { $_.VoiceInfo.Name -eq $wantedName } | Select-Object -First 1
+}
+if (-not $pickedVoice) {
+    $pickedVoice = $installed | Where-Object {
+        $_.VoiceInfo.Culture.Name -like 'zh*' -and
+        ($_.VoiceInfo.Name + ' ' + $_.VoiceInfo.Description) -match 'Natural|Online'
+    } | Select-Object -First 1
+}
+if (-not $pickedVoice) {
+    $pickedVoice = $installed | Where-Object { $_.VoiceInfo.Culture.Name -like 'zh*' } | Select-Object -First 1
+}
+if ($pickedVoice) { $synth.SelectVoice([string]$pickedVoice.VoiceInfo.Name) }
 
 $synth.Rate = $Rate
 

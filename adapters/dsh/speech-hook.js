@@ -65,6 +65,38 @@ function resolveEngine(override) {
   return path.join(os.homedir(), '.dsh', 'hooks', ENGINE_NAME)
 }
 
+/**
+ * Windows: locate PowerShell 7 (pwsh.exe) for the speech engine.
+ * 5.1 (powershell.exe) can only enumerate classic Desktop voices; pwsh 7's
+ * System.Speech also sees OneCore natural voices, which is what the `voice`
+ * config needs. Resolution order (2026-10-21):
+ *   1. pwsh on PATH (System32\WindowsPowerShell has only 5.1, so a PATH hit
+ *      means a real pwsh 7)
+ *   2. profile-local @dsh-ops/pwsh-win32-x64 (DSH's bundled runtime)
+ *   3. Program Files\PowerShell\7 (official MSI location)
+ *   4. powershell.exe fallback (same behavior as 1.8.2)
+ */
+let cachedPwsh = null
+function resolveWindowsPwsh() {
+  if (cachedPwsh) return cachedPwsh
+  // 1. profile 内置的 pwsh 7（@dsh-ops 运行时，零成本确定命中）
+  const candidates = [
+    path.join(__dirname, '..', '..', '..', '@dsh-ops', 'pwsh-win32-x64', 'bin', 'pwsh.exe'),
+    'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+  ]
+  for (const cand of candidates) {
+    if (fs.existsSync(cand)) { cachedPwsh = cand; return cachedPwsh }
+  }
+  // 2. PATH 上的 pwsh.exe（spawn 不解析扩展名，需全名）
+  try {
+    const probed = require('child_process').spawnSync('pwsh.exe', ['-NoProfile', '-Command', 'exit 0'], { encoding: 'utf8', timeout: 10000, windowsHide: true })
+    if (probed.status === 0) { cachedPwsh = 'pwsh.exe'; return cachedPwsh }
+  } catch (e) { /* probe failed */ }
+  // 3. 回退 5.1（与 1.8.2 行为一致：只有经典 Desktop 嗓音可用）
+  cachedPwsh = 'powershell.exe'
+  return cachedPwsh
+}
+
 // Platform-aware defaults: macOS `say` has no per-utterance ceiling, so
 // `maxChars` defaults to 0 (unlimited) there; Windows keeps the safe 300.
 const DEFAULT_MAX_CHARS = process.platform === 'darwin' ? 0 : 300
@@ -157,6 +189,7 @@ const SCHEMA_DEFAULTS = {
   maxChars: DEFAULT_MAX_CHARS,
   volume: 50,
   rate: 0,
+  voice: '',
   announceTurnEnd: false,
   speakTurnEndSummary: false,
   announceCommandDone: false,
@@ -220,6 +253,7 @@ function resolveConfig(value) {
     rate: process.platform === 'darwin'
       ? configNumber('rate', value.rate, 0, 0, Number.MAX_SAFE_INTEGER)
       : configNumber('rate', value.rate, 0, -10, 10),
+    voice: typeof value.voice === 'string' ? value.voice : '',
     announceTurnEnd: value.announceTurnEnd === true,
     speakTurnEndSummary: value.speakTurnEndSummary === true,
     announceCommandDone: value.announceCommandDone === true,
@@ -303,6 +337,7 @@ function buildConfig() {
       maxChars: z.natural().default(DEFAULT_MAX_CHARS).volatile(),
       volume: z.natural().default(50).volatile(),
       rate: z.number().default(0).volatile(),
+      voice: z.string().default('').volatile(),
       announceTurnEnd: z.boolean().default(false).volatile(),
       speakTurnEndSummary: z.boolean().default(false).volatile(),
       announceCommandDone: z.boolean().default(false).volatile(),
@@ -426,8 +461,16 @@ module.exports = {
         child = spawn('/bin/bash', [cfg.engine].concat(args), { detached: true, stdio: 'ignore' })
       } else {
         // Windows 语速 = SAPI 刻度（-10 到 10，0 = 正常；负值变慢），直接透传，
-        // 不要把 0/负值替换成 1（否则无法回到正常语速/减慢）
-        child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', cfg.engine, '-File', tmp, '-Volume', String(cfg.volume), '-Rate', String(cfg.rate), '-MaxChars', String(cfg.maxChars), '-LongTextMode', cfg.longTextMode, '-LongTextMessage', cfg.longTextMessage, '-CleanMarkdownFormatting', cfg.cleanMarkdownFormatting ? '1' : '0', '-ReadInlineCode', cfg.readInlineCode ? '1' : '0', '-CodeBlocks', cfg.codeBlocks, '-CodeBlockMaxChars', String(cfg.codeBlockMaxChars), '-CodeBlockReplacementText', cfg.codeBlockReplacementText, '-FullRead', fullRead ? '1' : '0'], { windowsHide: true, stdio: 'ignore' })
+        // 不要把 0/负值替换成 1（否则无法回到正常语速/减慢）。
+        // 引擎跑 pwsh 7（PowerShell Core）而不是 powershell.exe 5.1：5.1 的
+        // System.Speech 只能看到经典 Desktop 嗓音（Huihui/Zira/David），枚举
+        // 不到 OneCore 的 Yaoyao/Kangkang/Huihui 等自然嗓；pwsh 7 两个都能看到
+        // （2026-10-21 实测）。找到就用，找不到回退 powershell.exe（行为同 1.8.2）。
+        const winArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', cfg.engine, '-File', tmp, '-Volume', String(cfg.volume), '-Rate', String(cfg.rate), '-MaxChars', String(cfg.maxChars), '-LongTextMode', cfg.longTextMode, '-LongTextMessage', cfg.longTextMessage, '-CleanMarkdownFormatting', cfg.cleanMarkdownFormatting ? '1' : '0', '-ReadInlineCode', cfg.readInlineCode ? '1' : '0', '-CodeBlocks', cfg.codeBlocks, '-CodeBlockMaxChars', String(cfg.codeBlockMaxChars), '-CodeBlockReplacementText', cfg.codeBlockReplacementText, '-FullRead', fullRead ? '1' : '0']
+        if (cfg.voice && cfg.voice.trim()) winArgs.push('-Voice', cfg.voice.trim())
+        const pwshExe = resolveWindowsPwsh()
+        child = spawn(pwshExe, winArgs, { windowsHide: true, stdio: 'ignore' })
+        log('engine spawn:', pwshExe, 'voice:', cfg.voice || '(engine default)')
       }
       const token = ++speechToken
       activeSpeech = { process: child, tmp, token, item, gapMs: item.gapMs || 0 }
