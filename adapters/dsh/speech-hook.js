@@ -683,11 +683,15 @@ module.exports = {
           return
         }
         // default mode: throttle/merge the final reply; a tool/call cancels it,
-        // and turn/end 兜底补播 lastText（见上方 turn/end 分支）
+        // and turn/end 兜底补播 lastText（见上方 turn/end 分支）。
+        // lastText 的追踪无条件进行：turn/end 的「完成摘要」（speakTurnEndSummary）
+        // 也要用它——若被 automaticSpeech 开关挡在赋值之前，关掉正文朗读时摘要
+        // 会永远拿不到文本（2026-10-21 修复 1.8.2 漏检时引入的次生问题）。
         cancelPending()
-        pendingText = text
         lastText = text
         lastMessageId = message && message.id ? String(message.id) : null
+        if (!cfg.automaticSpeech) return
+        pendingText = text
         timer = setTimeout(() => {
           if (!pendingText) return
           const itemText = pendingText
