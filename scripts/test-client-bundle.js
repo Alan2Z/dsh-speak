@@ -378,4 +378,28 @@ const macLabels = fieldLabels(render(macSettings.component, { close() {} }))
 assert.ok(!macLabels.includes(VOICE_LABEL), `macOS hides the Windows-only voice field: ${JSON.stringify(macLabels)}`)
 console.log('Voice field is Windows-only and sits with the audio settings ✓')
 
+// Top of the settings page: a localized README link plus a collapsed
+// prerequisites block, so a fresh install knows what the engine needs before
+// touching any switch.
+const guideLink = findOne(settingsTree, 'a')
+assert.ok(guideLink, 'settings page links the usage guide')
+assert.strictEqual(guideLink.props.children, '使用说明', 'guide link copy is localized')
+assert.strictEqual(guideLink.props.target, '_blank', 'the guide opens in a new tab')
+assert.ok(String(guideLink.props.href).endsWith('/blob/main/README.zh-CN.md'),
+  `Chinese UI links the Chinese README: ${guideLink.props.href}`)
+const guideRow = guideLink.props ? settingsTree.props.children.find(child => JSON.stringify(child).includes('dsh-speak-guide-link')) : null
+assert.ok(JSON.stringify(guideRow).includes('点个 Star'), 'a star request follows the guide link')
+const prereqRow = findAll(settingsTree, 'DisclosureRow').find(row => row.props.title === '前置条件')
+assert.ok(prereqRow, 'prerequisites disclosure is present')
+assert.strictEqual(prereqRow.props.open, false, 'prerequisites start collapsed')
+assert.ok(JSON.stringify(prereqRow).includes('NaturalVoiceSAPIAdapter'),
+  'prerequisites keep the natural-voice setup notes')
+// The user asked for this block above the master switch, not buried at the bottom.
+const sectionKids = settingsTree.props.children
+const guidePos = sectionKids.findIndex(child => JSON.stringify(child).includes('dsh-speak-guide-link'))
+const masterPos = sectionKids.findIndex(child => JSON.stringify(child).includes('总开关'))
+assert.ok(guidePos >= 0 && masterPos >= 0 && guidePos < masterPos,
+  `guide sits above the master switch (guide=${guidePos}, master=${masterPos})`)
+console.log('Usage-guide link and collapsed prerequisites render at the top ✓')
+
 console.log('ALL PASS ✓')

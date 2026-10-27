@@ -40,6 +40,28 @@ window.__ModuleLoader__.load({
       settingsAria: 'dsh-speak 设置',
       settingsIntro: '自动播报与逐条重播的语音偏好。',
       settingsTitle: 'dsh-speak',
+      guideLink: '使用说明',
+      guideUrl: 'https://github.com/Alan2Z/dsh-speak/blob/main/README.zh-CN.md',
+      starAsk: '如果它帮到了你，欢迎去仓库点个 Star 支持一下。',
+      prerequisitesTitle: '前置条件',
+      prerequisitesBody: [
+        'Windows',
+        '· Windows 10 或 11，任意较新的 PowerShell。',
+        '· 自然语音：',
+        '  · Windows 11（21H2–23H2）：系统已内置自然语音包，无需额外安装——在「设置 → 辅助功能 → 讲述人」或「设置 → 时间和语言 → 语音」里启用/切换即可。',
+        '  · Windows 11 24H2/25H2：自然语音已改为 MSIX 应用包，System.Speech 可能枚举不到（找不到自然语音、回退到机械音）——与 Windows 10 相同，需安装 NaturalVoiceSAPIAdapter 桥接：https://github.com/gexgd0419/NaturalVoiceSAPIAdapter',
+        '  · Windows 10：需要安装 NaturalVoiceSAPIAdapter，并用它的 VoiceDownloader 手动下载需要的中文（或其他语言）自然语音包。',
+        '· 没有自然语音时，引擎回退到系统自带语音（如 Huihui）。',
+        '',
+        'macOS',
+        '· macOS（Apple Silicon / Intel 均可），系统自带 say 命令，无需安装任何软件。',
+        '',
+        'DSH 版本',
+        '· 已在 DSH 0.1.7-rc.2 上验证；1.8.2 依赖 0.1.7 的设置模型，DSH ≤ 0.1.6 请用 1.8.1。',
+        '· 宿主要求声明在 package.json 的 engines.dsh（>=0.1.7-rc.2），插件市场的卡片与「适配当前 DSH」筛选读的就是它。',
+        '',
+        '安装、全部选项与排障见上方「使用说明」。',
+      ].join('\n'),
       actionSpeakTurn: '播报此回合',
       actionStop: '停止播报',
       toggleOn: '开',
@@ -112,6 +134,28 @@ window.__ModuleLoader__.load({
       settingsAria: 'dsh-speak settings',
       settingsIntro: 'Speech preferences for automatic announcements and per-message replay.',
       settingsTitle: 'dsh-speak',
+      guideLink: 'Usage guide',
+      guideUrl: 'https://github.com/Alan2Z/dsh-speak/blob/main/README.md',
+      starAsk: 'If it helps, a star on the repository is much appreciated.',
+      prerequisitesTitle: 'Prerequisites',
+      prerequisitesBody: [
+        'Windows',
+        '· Windows 10 or 11, PowerShell (any recent version).',
+        '· Natural voices:',
+        '  · Windows 11 (21H2–23H2): the voice packs are built in — no extra install. Enable/switch them in Settings → Accessibility → Narrator or Settings → Time & Language → Speech.',
+        '  · Windows 11 24H2/25H2: natural voices moved to MSIX app packages that System.Speech may not enumerate (it falls back to a robotic stock voice). As on Windows 10, install NaturalVoiceSAPIAdapter to bridge them: https://github.com/gexgd0419/NaturalVoiceSAPIAdapter',
+        '  · Windows 10: install NaturalVoiceSAPIAdapter and use its VoiceDownloader to download the natural voice pack(s) you want (Chinese or any other language).',
+        '· Without natural voices the engine falls back to a stock voice (e.g. Huihui).',
+        '',
+        'macOS',
+        '· macOS (Apple Silicon or Intel), built-in say command — no extra software.',
+        '',
+        'DSH web app',
+        '· Tested against DSH 0.1.7-rc.2; 1.8.2 needs the 0.1.7 settings model, so use 1.8.1 on DSH ≤ 0.1.6.',
+        '· The host floor lives in package.json engines.dsh (>=0.1.7-rc.2) — that is what the catalog card and its "compatible with current DSH" filter read.',
+        '',
+        'Install steps, the full option reference and troubleshooting are in the "Usage guide" link above.',
+      ].join('\n'),
       actionSpeakTurn: 'Speak turn',
       actionStop: 'Stop speaking',
       toggleOn: 'On',
@@ -347,6 +391,7 @@ window.__ModuleLoader__.load({
       function SettingsCard() {
         // hooks must run unconditionally (before the ready-guard return)
         const [eventsOpen, setEventsOpen] = React.useState(false)
+        const [guideOpen, setGuideOpen] = React.useState(false)
         const snapshot = useSettings(); if (!snapshot || snapshot.status !== 'ready' || !snapshot.value) return null
         const value = snapshot.value; const disabled = !snapshot.writable; const clean = value.cleanMarkdownFormatting !== false
         // `set` resolves to the Host's answer so a control can react to a refusal:
@@ -364,6 +409,13 @@ window.__ModuleLoader__.load({
         }
         const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent || navigator.platform || '')
         return e('section', { 'aria-label': t('settingsAria') }, e('h3', null, t('settingsTitle')), e('p', null, t('settingsIntro')),
+          // 顶部「使用说明」：插件市场放不下文档，这里给一个中文 README 的入口 +
+          // 默认折叠的前置条件（系统/自然语音/DSH 版本），新用户不用先翻仓库。
+          e('p', { className: 'dsh-speak-guide-link-row' },
+            e('a', { className: 'dsh-speak-guide-link', href: t('guideUrl'), target: '_blank', rel: 'noreferrer noopener' }, t('guideLink')),
+            e('span', { className: 'dsh-speak-star-ask' }, t('starAsk'))),
+          e(DisclosureRow, { icon: null, title: t('prerequisitesTitle'), open: guideOpen, expandable: true, onToggle: () => setGuideOpen(!guideOpen), expandOnRowClick: true },
+            e('div', { style: { paddingLeft: '22px' } }, e('p', { className: 'dsh-speak-guide-body' }, t('prerequisitesBody')))),
           e(Toggle, { label: t('masterSwitch'), value: value.enabled !== false, disabled, onChange: next => set('enabled', next), hint: t('masterSwitchHint') }),
           e(Toggle, { label: t('automaticSpeech'), value: value.automaticSpeech !== false, disabled, onChange: next => set('automaticSpeech', next), hint: t('automaticSpeechHint') }),
           e(Toggle, { label: t('replayFullRead'), value: value.replayFullRead === true, disabled, onChange: next => set('replayFullRead', next), hint: t('replayFullReadHint') }),
@@ -395,7 +447,7 @@ window.__ModuleLoader__.load({
       }
       ctx.effect(() => {
         const style = document.createElement('style'); style.dataset.plugin = 'dsh-speak'
-        style.textContent = '.dsh-speak-message-action{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:5px;border:0;border-radius:28px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;font:inherit;font-size:14px;line-height:1}.dsh-speak-message-action:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.dsh-speak-message-action[data-speaking]{color:var(--dsw-alias-label-primary)}.dsh-speak-message-action:disabled{cursor:default;opacity:.4}.dsh-speak-field{display:flex;flex-direction:column;gap:8px;margin:0 0 20px}.dsh-speak-field-label{font-weight:600;color:var(--dsw-alias-label-primary)}.dsh-speak-inline-field{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dsh-speak-inline-field>.dsh-speak-field-label{flex:none}.dsh-speak-field-hint{margin:0;color:var(--dsw-alias-label-tertiary)}.dsh-speak-field+.dsh-speak-field{margin-top:20px}.dsh-speak-option-row{display:inline-flex;align-items:center;gap:8px;width:max-content;max-width:100%}.dsh-speak-input-row{display:flex;max-width:100%}.dsh-speak-input-row>span{max-width:100%}'
+        style.textContent = '.dsh-speak-message-action{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:5px;border:0;border-radius:28px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;font:inherit;font-size:14px;line-height:1}.dsh-speak-message-action:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.dsh-speak-message-action[data-speaking]{color:var(--dsw-alias-label-primary)}.dsh-speak-message-action:disabled{cursor:default;opacity:.4}.dsh-speak-field{display:flex;flex-direction:column;gap:8px;margin:0 0 20px}.dsh-speak-field-label{font-weight:600;color:var(--dsw-alias-label-primary)}.dsh-speak-inline-field{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dsh-speak-inline-field>.dsh-speak-field-label{flex:none}.dsh-speak-field-hint{margin:0;color:var(--dsw-alias-label-tertiary)}.dsh-speak-field+.dsh-speak-field{margin-top:20px}.dsh-speak-option-row{display:inline-flex;align-items:center;gap:8px;width:max-content;max-width:100%}.dsh-speak-input-row{display:flex;max-width:100%}.dsh-speak-input-row>span{max-width:100%}.dsh-speak-guide-link-row{margin:0 0 12px}.dsh-speak-guide-link{color:var(--dsw-alias-label-primary);text-decoration:underline;text-underline-offset:2px;font-weight:600}.dsh-speak-star-ask{margin-left:12px;color:var(--dsw-alias-label-primary)}.dsh-speak-guide-body{margin:0;white-space:pre-wrap;line-height:1.6;max-height:360px;overflow:auto;color:var(--dsw-alias-label-primary)}'
         document.head.appendChild(style); return () => style.remove()
       }, 'dsh-speak message action styles')
       ctx.slots.inject('conversation.chat.assistant-actions', () => ctx.slots.register({ name: 'conversation.chat.assistant-actions', id: 'speak', order: 5, label: 'Speak', locale: NS }, SpeakAction))
