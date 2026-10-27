@@ -69,13 +69,17 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
                 （如 "Microsoft Xiaoxiao"）         * 或 -v 指定经典音色
               * 回退：任意 zh 语音（如 "Microsoft     （Eddy/Tingting/Flo…）
                 Huihui"）                           * 无音量参数（随系统）
+              * -Voice 可指定全名；只有配了它才
+                用 pwsh 7（5.1 看不到 OneCore 嗓）
 ```
 
 ### 3.1 引擎 — `engine/speak.ps1`（macOS 上为 `engine/speak.sh`）
 
 新适配器唯一需要打交道的文件。两种输入模式：`-Text "..."` 直接传入，或
 `-File C:\path\msg.txt`（UTF-8）。另有 `-Volume`、`-Rate`、`-MaxChars`、
-`-LongTextMessage`（见 §5）。在 macOS 上插件会自动改选 `speak.sh`
+`-LongTextMessage`、`-Voice`（嗓音全名，见 §5）。宿主默认一律用
+`powershell.exe`（5.1），**只有配了 `voice`** 才切 pwsh 7（OneCore 嗓音只有它能枚举），
+且先探测该 pwsh 能否加载 `System.Speech`，不行就退回 5.1。在 macOS 上插件会自动改选 `speak.sh`
 （`say` 命令；默认音色跟随系统——Siri 音色"声音 1-4"未暴露给 `say`，
 需用 `-v` 强制指定名字；无音量参数）。
 
@@ -122,6 +126,8 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
   事件；开 = 每条 assistant 消息立即入队朗读（中间消息也读）。
 - **可选事件播报**（1.6.0，默认全关）：`turn/end`、`command/done`、
   `goal/change`、`tool/result`（出错时）、`todo/write` 各自独立开关（见 §5）。
+  `speakTurnEndSummary` 打开时，`turn/end` 的固定短语会带上最终回复的一句话摘要
+  （节流路径刚念过正文时跳过；`queueAllMessages` 模式下照常追加）。
 - **设置表单**（1.6.0；1.8.2 为 DSH 0.1.7 重做）：插件导出一份静态 `Config`
   schema（`module.exports.Config`，每个字段都 `.volatile()`），由 settings 服务
   投影成设置界面。条目的 **Loader id 就是 settings namespace**
@@ -297,8 +303,10 @@ config:
   maxChars: 300                # macOS 默认 0 = 不限
   volume: 50                   # 仅 Windows
   rate: 0                      # 语速：Win SAPI 刻度 -10~10（0=正常）/ mac wpm（175）
+  voice: ''                    # 仅 Windows；SAPI 嗓音全名（'' = 引擎默认）
   # —— 可选事件播报（默认全关）——
   announceTurnEnd: false     # turn/end
+  speakTurnEndSummary: false # turn/end 带上最终回复的一句话摘要
   announceCommandDone: false # command/done
   announceGoalChange: false  # goal/change
   announceToolErrors: false  # tool/result 带 error 或 isError 块时

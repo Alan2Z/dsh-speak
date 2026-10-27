@@ -342,7 +342,7 @@ document — the settings service persists UI edits into the row it read them fr
     maxChars: 300           # per-utterance ceiling (macOS default 0 = unlimited)
     volume: 50              # Windows only
     rate: 0                 # 0 = engine default (Windows SAPI scale / macOS wpm)
-    voice: ''               # Windows voice full name (e.g. Microsoft Yaoyao); '' = engine default
+    voice: ''               # Windows only; SAPI voice full name (e.g. Microsoft Yaoyao); '' = engine default
     # —— optional event announcements (1.6.0, all off by default) ——
     announceTurnEnd: false     # turn/end — "第 N 轮对话完成"
     speakTurnEndSummary: false # completed turns get a one-line reply summary
@@ -402,9 +402,9 @@ document — the settings service persists UI edits into the row it read them fr
 | `maxChars` | platform | per-utterance ceiling. **macOS default 0 (`say` has no ceiling); Windows default 300** (SAPI fails silently beyond ~375-470) |
 | `volume` | `50` | Windows only (0-100); macOS volume follows the system |
 | `rate` | `0` | speech rate: Windows SAPI scale (-10 to 10, 0 = normal; try 1-3 for faster); macOS words-per-minute (default 175, 200 is a bit faster) |
-| `voice` | `''` | Windows voice full name (e.g. `Microsoft Yaoyao`), passed to the engine as `-Voice`. Empty = engine default policy (natural zh voice → any zh voice). OneCore natural voices are only enumerable under PowerShell 7 — the hook resolves pwsh 7 automatically and falls back to powershell.exe |
+| `voice` | `''` | Windows only. Exact SAPI voice name (e.g. `Microsoft Yaoyao`), passed to the engine as `-Voice`. Empty = engine default policy (natural zh voice → any zh voice). OneCore voices are only enumerable under PowerShell 7, so **only when `voice` is set** does the hook switch to a pwsh 7 it has verified (Program Files → bundled runtime → PATH); otherwise — and whenever that pwsh cannot load `System.Speech` — it keeps `powershell.exe` (1.8.2 behavior) |
 | `announceTurnEnd` | `false` | announce "第 N 轮对话完成/中断/异常结束" on turn end (`turn/end`) |
-| `speakTurnEndSummary` | `false` | completed turns get a one-line summary of the final reply: "第 N 轮对话完成：<summary>" (markdown stripped, ≤60 chars, ends at a sentence-final punctuation; not repeated when the reply was already auto-spoken) |
+| `speakTurnEndSummary` | `false` | completed turns get a one-line summary of the final reply: "第 N 轮对话完成：<summary>" (markdown stripped, up to 60 chars — a hard cut ends with an ellipsis; skipped when the throttled reply was just spoken, still appended in `queueAllMessages` mode) |
 | `announceCommandDone` | `false` | announce when a command finishes or fails (`command/done`) |
 | `announceGoalChange` | `false` | announce goal created/updated/completed/paused/resumed (`goal/change`, objective head) |
 | `announceToolErrors` | `false` | announce "工具调用出错" when a tool call returns an error: `tool/result` carrying `error` (structured failure identity) or a result block with `isError === true`. A **non-zero shell exit does NOT count** — pwsh/bash report `exit code: N` as result data by design, so only infrastructure failures (spawn errors, aborts) and structured tool failures (e.g. fs) set `isError` (English details / technical codes dropped, Chinese details kept) |

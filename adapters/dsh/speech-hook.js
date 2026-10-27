@@ -66,35 +66,57 @@ function resolveEngine(override) {
 }
 
 /**
- * Windows: locate PowerShell 7 (pwsh.exe) for the speech engine.
- * 5.1 (powershell.exe) can only enumerate classic Desktop voices; pwsh 7's
- * System.Speech also sees OneCore natural voices, which is what the `voice`
- * config needs. Resolution order (2026-10-21):
- *   1. pwsh on PATH (System32\WindowsPowerShell has only 5.1, so a PATH hit
- *      means a real pwsh 7)
- *   2. profile-local @dsh-ops/pwsh-win32-x64 (DSH's bundled runtime)
- *   3. Program Files\PowerShell\7 (official MSI location)
- *   4. powershell.exe fallback (same behavior as 1.8.2)
+ * Windows: PowerShell 7 (pwsh.exe) is needed only for OneCore voices.
+ * 5.1 (powershell.exe) enumerates the classic Desktop voices only; pwsh 7's
+ * System.Speech also sees OneCore voices (Yaoyao, Kangkang, Huihui …), which is
+ * what an explicit `voice` may name. Every default utterance therefore keeps
+ * 1.8.2's powershell.exe, and only a configured voice switches the interpreter —
+ * and only after a probe proves that pwsh can load System.Speech, because a pwsh
+ * that exists yet cannot speak would otherwise silence every announcement.
+ * Resolution order: 1. Program Files\PowerShell\7 (official MSI location)
+ *                   2. profile-local @dsh-ops runtime (desktop bundles)
+ *                   3. pwsh.exe on PATH (System32\WindowsPowerShell has only 5.1)
  */
-let cachedPwsh = null
-function resolveWindowsPwsh() {
-  if (cachedPwsh) return cachedPwsh
-  // 1. profile 内置的 pwsh 7（@dsh-ops 运行时，零成本确定命中）
+let pwshResolved = false
+let pwshPath = null
+function findWindowsPwsh() {
+  if (pwshResolved) return pwshPath
+  pwshResolved = true
   const candidates = [
-    path.join(__dirname, '..', '..', '..', '@dsh-ops', 'pwsh-win32-x64', 'bin', 'pwsh.exe'),
     'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+    path.join(__dirname, '..', '..', '..', '@dsh-ops', 'pwsh-win32-x64', 'bin', 'pwsh.exe'),
   ]
   for (const cand of candidates) {
-    if (fs.existsSync(cand)) { cachedPwsh = cand; return cachedPwsh }
+    if (fs.existsSync(cand)) { pwshPath = cand; return pwshPath }
   }
-  // 2. PATH 上的 pwsh.exe（spawn 不解析扩展名，需全名）
+  // PATH 上的 pwsh.exe（spawn 不解析扩展名，需全名）
   try {
     const probed = require('child_process').spawnSync('pwsh.exe', ['-NoProfile', '-Command', 'exit 0'], { encoding: 'utf8', timeout: 10000, windowsHide: true })
-    if (probed.status === 0) { cachedPwsh = 'pwsh.exe'; return cachedPwsh }
+    if (probed.status === 0) pwshPath = 'pwsh.exe'
   } catch (e) { /* probe failed */ }
-  // 3. 回退 5.1（与 1.8.2 行为一致：只有经典 Desktop 嗓音可用）
-  cachedPwsh = 'powershell.exe'
-  return cachedPwsh
+  return pwshPath
+}
+
+let speechProbe = null
+/** Whether this pwsh can actually load System.Speech (cached: one probe per process). */
+function pwshCanSpeak(exe) {
+  if (speechProbe !== null) return speechProbe
+  try {
+    const probe = require('child_process').spawnSync(exe, ['-NoProfile', '-Command', 'Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() | Out-Null; exit 0'], { encoding: 'utf8', timeout: 15000, windowsHide: true })
+    speechProbe = probe.status === 0
+  } catch (e) { speechProbe = false }
+  return speechProbe
+}
+
+/**
+ * The Windows engine process for one utterance: powershell.exe (1.8.2 behavior)
+ * unless a voice is configured, in which case pwsh 7 is used when it can speak.
+ */
+function windowsSpeechEngine(voice) {
+  if (!voice) return { exe: 'powershell.exe', canUseVoice: true }
+  const pwsh = findWindowsPwsh()
+  if (pwsh && pwshCanSpeak(pwsh)) return { exe: pwsh, canUseVoice: true }
+  return { exe: 'powershell.exe', canUseVoice: false }
 }
 
 // Platform-aware defaults: macOS `say` has no per-utterance ceiling, so
@@ -462,15 +484,16 @@ module.exports = {
       } else {
         // Windows 语速 = SAPI 刻度（-10 到 10，0 = 正常；负值变慢），直接透传，
         // 不要把 0/负值替换成 1（否则无法回到正常语速/减慢）。
-        // 引擎跑 pwsh 7（PowerShell Core）而不是 powershell.exe 5.1：5.1 的
-        // System.Speech 只能看到经典 Desktop 嗓音（Huihui/Zira/David），枚举
-        // 不到 OneCore 的 Yaoyao/Kangkang/Huihui 等自然嗓；pwsh 7 两个都能看到
-        // （2026-10-21 实测）。找到就用，找不到回退 powershell.exe（行为同 1.8.2）。
+        // 默认仍用 1.8.2 的 powershell.exe；只有配了 voice 才换 pwsh 7（才能枚举
+        // OneCore 自然嗓），并且先探测它能否加载 System.Speech，不行就退回 5.1——
+        // 此时指定嗓音可能不存在，引擎会按自己的策略退回默认中文嗓。
         const winArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', cfg.engine, '-File', tmp, '-Volume', String(cfg.volume), '-Rate', String(cfg.rate), '-MaxChars', String(cfg.maxChars), '-LongTextMode', cfg.longTextMode, '-LongTextMessage', cfg.longTextMessage, '-CleanMarkdownFormatting', cfg.cleanMarkdownFormatting ? '1' : '0', '-ReadInlineCode', cfg.readInlineCode ? '1' : '0', '-CodeBlocks', cfg.codeBlocks, '-CodeBlockMaxChars', String(cfg.codeBlockMaxChars), '-CodeBlockReplacementText', cfg.codeBlockReplacementText, '-FullRead', fullRead ? '1' : '0']
-        if (cfg.voice && cfg.voice.trim()) winArgs.push('-Voice', cfg.voice.trim())
-        const pwshExe = resolveWindowsPwsh()
-        child = spawn(pwshExe, winArgs, { windowsHide: true, stdio: 'ignore' })
-        log('engine spawn:', pwshExe, 'voice:', cfg.voice || '(engine default)')
+        const voice = (cfg.voice || '').trim()
+        if (voice) winArgs.push('-Voice', voice)
+        const engine = windowsSpeechEngine(voice)
+        child = spawn(engine.exe, winArgs, { windowsHide: true, stdio: 'ignore' })
+        log('engine spawn:', engine.exe, 'voice:', voice || '(engine default)')
+        if (!engine.canUseVoice) log('pwsh 7 不可用或无法加载 System.Speech，已回退 powershell.exe；指定嗓音若不存在将退回默认中文嗓')
       }
       const token = ++speechToken
       activeSpeech = { process: child, tmp, token, item, gapMs: item.gapMs || 0 }
@@ -704,7 +727,9 @@ module.exports = {
           const base = ({ completed: prefix + '完成', aborted: prefix + '中断', interrupted: prefix + '中断', blocked: prefix + '被阻塞', error: prefix + '异常结束', 'max-tokens': prefix + '异常结束' })[kind] || prefix + '结束'
           // 完成时带一句话摘要（speakTurnEndSummary 开启时）：取本回合的回复
           // 正文，剥 markdown 后截前 60 字、在句末标点收尾，念成
-          // 「第 N 轮对话完成：<摘要>」。正文已被自动朗读过时不重复念。
+          // 「第 N 轮对话完成：<摘要>」。节流路径刚念过正文时（lastSpokenText）
+          // 不重复；但关闭自动朗读、或 queueAllMessages 模式下正文没走节流去重，
+          // 摘要照常补一句。
           let text = base
           if (kind === 'completed' && cfg.speakTurnEndSummary && lastText && lastText !== lastSpokenText) {
             const summary = summarizeForSpeech(lastText, 60)
@@ -771,6 +796,12 @@ module.exports = {
 
         // queueAllMessages mode (PR #2): enqueue every assistant message now
         if (cfg.queueAllMessages && cfg.automaticSpeech) {
+          // 每条消息都已朗读；仍然记录最后一条文本，供 turn/end 的「完成摘要」
+          // （speakTurnEndSummary）使用。这里不设 lastSpokenText：本模式不走去重，
+          // 摘要是用户显式开启后额外补的一句。
+          cancelPending()
+          lastText = text
+          lastMessageId = message && message.id ? String(message.id) : null
           enqueue(hostItem('automatic', session, event, text, message && message.id))
           return
         }

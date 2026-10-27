@@ -310,7 +310,7 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
     maxChars: 300           # 引擎单次朗读字数上限（macOS 默认 0 = 不限）
     volume: 50              # 仅 Windows
     rate: 0                 # 0 = 引擎默认（Windows SAPI 刻度 / macOS wpm）
-    voice: ''               # Windows 嗓音全名（如 Microsoft Yaoyao）；留空走引擎默认
+    voice: ''               # 仅 Windows；嗓音全名（如 Microsoft Yaoyao）；留空走引擎默认
     # —— 可选事件播报（1.6.0，默认全关）——
     announceTurnEnd: false     # 回合结束（"第 N 轮对话完成"）
     speakTurnEndSummary: false # 完成播报带一句话摘要
@@ -365,9 +365,9 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
 | `maxChars` | 平台相关 | 引擎单次朗读上限。**macOS 默认 0（`say` 无上限）；Windows 默认 300**（SAPI 超过约 375-470 字会静默失败） |
 | `volume` | `50` | 仅 Windows（0-100）；macOS 音量跟随系统 |
 | `rate` | `0` | 语速：Windows SAPI 刻度（-10 到 10，0 = 正常，推荐 0 / 稍快 1-3）；macOS words-per-minute（默认 175，稍快 200） |
-| `voice` | `''` | Windows 嗓音全名（如 `Microsoft Yaoyao`），以 `-Voice` 传给引擎。留空走引擎默认策略（自然中文嗓 → 任意中文嗓）。OneCore 自然嗓只有 PowerShell 7 枚举得到——宿主会自动解析 pwsh 7，找不到回退 powershell.exe |
+| `voice` | `''` | 仅 Windows：嗓音全名（如 `Microsoft Yaoyao`），以 `-Voice` 传给引擎。留空走引擎默认策略（自然中文嗓 → 任意中文嗓）。OneCore 自然嗓只有 PowerShell 7 枚举得到，所以**只有配了 `voice`** 时宿主才会切到验证过的 pwsh 7（Program Files → 内置运行时 → PATH）；其余情况、以及该 pwsh 加载不了 `System.Speech` 时，仍用 `powershell.exe`（与 1.8.2 一致） |
 | `announceTurnEnd` | `false` | 回合结束时播报"第 N 轮对话完成/中断/异常结束"（`turn/end`） |
-| `speakTurnEndSummary` | `false` | 完成播报带一句话摘要："第 N 轮对话完成：<摘要>"（剥 markdown、≤60 字、尽量在句末标点收尾；正文已被自动朗读过时不重复念） |
+| `speakTurnEndSummary` | `false` | 完成播报带一句话摘要："第 N 轮对话完成：<摘要>"（剥 markdown、最多 60 字，硬截断时补省略号；节流路径刚念过正文时跳过；`queueAllMessages` 模式下照常追加） |
 | `announceCommandDone` | `false` | 命令执行完成/失败时播报（`command/done`） |
 | `announceGoalChange` | `false` | 目标创建/更新/完成/暂停/恢复时播报（`goal/change`，含目标标题前 40 字） |
 | `announceToolErrors` | `false` | 工具调用返回错误时播报"工具调用出错"（英文错误详情/技术 code 截掉，只保留中文详情）。触发条件：`tool/result` 带 `error`（结构化失败身份）或结果块 `isError === true`。注意 **shell 命令非零退出不算**——pwsh/bash 把 `exit code: N` 当结果数据上报（dsh 明文如此设计），只有基础设施失败（spawn 错误、abort）和 fs 这类结构化失败才置 `isError` |

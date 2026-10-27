@@ -415,6 +415,7 @@ async function main() {
   if (IS_WIN) {
     assert.strictEqual(flagValue(engineArgs, '-Volume'), '0', `explicit volume 0 must reach the engine, got ${flagValue(engineArgs, '-Volume')}`)
     assert.strictEqual(flagValue(engineArgs, '-Rate'), '10', `out-of-range SAPI rate must clamp to 10, got ${flagValue(engineArgs, '-Rate')}`)
+    assert.ok(!engineArgs.includes('-Voice'), `no voice configured → no -Voice flag: ${JSON.stringify(engineArgs)}`)
   } else {
     // macOS has no volume flag (`say` follows the system volume) and rate 0 means
     // "engine default", so neither is passed.
@@ -422,6 +423,59 @@ async function main() {
     assert.ok(!engineArgs.includes('-r'), 'macOS rate 0 = engine default: no -r flag')
   }
   await t15.finishAll()
+
+  // ---- 16. automaticSpeech off: the throttled path must stay silent ----
+  // Regression from 1.8.2 (fixed by PR #5): the default throttle path skipped the
+  // automaticSpeech check, so the final reply was still spoken with the switch off.
+  const t16 = applyWith({ automaticSpeech: false, announceTurnEnd: true, throttleMs: 10 })
+  t16.fireEvent('assistant/message', { turn: 14, step: 1, message: { id: 'a1', content: [{ type: 'text', text: '不应朗读的正文' }] } })
+  t16.fire('turn/end', { turn: 14, reason: { kind: 'completed' } })
+  await t16.flush(40)
+  await t16.finishAll()
+  await t16.flush(20)
+  assert.ok(!announced.includes('不应朗读的正文'),
+    `automaticSpeech off must not speak the reply: ${JSON.stringify(announced)}`)
+  assert.ok(announced.includes('第 14 轮对话完成'),
+    `turn/end still announced with automaticSpeech off: ${JSON.stringify(announced)}`)
+
+  // ---- 17. speakTurnEndSummary: markdown stripped, fires when the body was not spoken ----
+  const t17 = applyWith({ automaticSpeech: false, announceTurnEnd: true, speakTurnEndSummary: true, throttleMs: 10 })
+  t17.fireEvent('assistant/message', { turn: 15, step: 1, message: { id: 's1', content: [{ type: 'text', text: '## 完成\n\n```js\nconsole.log(1)\n```\n\n已修复 **语音** 的 `voice` 配置。' }] } })
+  t17.fire('turn/end', { turn: 15, reason: { kind: 'completed' } })
+  await t17.flush(20)
+  await t17.finishAll()
+  await t17.flush(20)
+  assert.ok(announced.includes('第 15 轮对话完成：完成 已修复 语音 的 voice 配置。'),
+    `summary strips headings, code fences and emphasis: ${JSON.stringify(announced)}`)
+
+  // ---- 18. speakTurnEndSummary in queueAllMessages mode ----
+  // The queue branch used to enqueue and return before tracking lastText, so the
+  // summary silently never fired in that mode.
+  const t18 = applyWith({ queueAllMessages: true, announceTurnEnd: true, speakTurnEndSummary: true, throttleMs: 10 })
+  t18.fireEvent('assistant/message', { turn: 16, step: 1, message: { id: 'u1', content: [{ type: 'text', text: '中间消息。' }] } })
+  t18.fire('turn/end', { turn: 16, reason: { kind: 'completed' } })
+  await t18.flush(20)
+  await t18.finishAll()
+  await t18.flush(20)
+  assert.ok(announced.includes('中间消息。'),
+    `queueAllMessages still speaks the body: ${JSON.stringify(announced)}`)
+  assert.ok(announced.includes('第 16 轮对话完成：中间消息。'),
+    `queueAllMessages appends the summary: ${JSON.stringify(announced)}`)
+
+  // ---- 19. an explicit voice reaches the engine as -Voice (trimmed) ----
+  const t19 = applyWith({ voice: '  Microsoft Yaoyao  ', throttleMs: 10 })
+  t19.fireEvent('assistant/message', { turn: 17, step: 1, message: { id: 'v1', content: [{ type: 'text', text: '嗓音测试' }] } })
+  await t19.flush(60)
+  const voiceSpawn = spawned[0]
+  assert.ok(voiceSpawn, 'a speech process was spawned for the voice case')
+  if (IS_WIN) {
+    assert.strictEqual(flagValue(voiceSpawn.args, '-Voice'), 'Microsoft Yaoyao',
+      `configured voice is trimmed and passed: ${JSON.stringify(voiceSpawn.args)}`)
+  } else {
+    assert.ok(!voiceSpawn.args.includes('-Voice'), 'macOS has no voice flag (say follows the system)')
+  }
+  await t19.finishAll()
+  await t19.flush(20)
 
   console.log('ALL PASS ✓')
   process.exit(0)

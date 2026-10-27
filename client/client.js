@@ -372,6 +372,9 @@ window.__ModuleLoader__.load({
           e(Toggle, { label: t('cleanMarkdown'), value: clean, disabled, onChange: next => set('cleanMarkdownFormatting', next), hint: t('cleanMarkdownHint') }), e(MarkdownCleaning, { value, clean, disabled, set }),
           e(SettingInput, { label: t('maxChars'), value: value.maxChars == null ? 0 : value.maxChars, numeric: true, disabled, onChange: next => { if (/^\d+$/.test(next)) set('maxChars', Number(next)) }, hint: t('maxCharsHint') }),
           e(SettingInput, { label: t('volume'), value: value.volume == null ? 50 : value.volume, numeric: true, disabled, onChange: next => { if (/^\d+$/.test(next)) set('volume', Number(next)) }, hint: t('volumeHint') }),
+          // voice 是 Windows 专属（macOS 的 say 不支持指定嗓音），跟音量/语速放在
+          // 音频区块；macOS 上不显示，免得出现一个改了没反应的输入框。
+          isMac ? null : e(SettingInput, { label: t('voice'), value: value.voice || '', disabled, onChange: next => set('voice', next), hint: t('voiceHint') }),
           e(SettingInput, { label: t('rate'), value: value.rate == null ? 0 : value.rate, numeric: true, disabled, onChange: next => { if (/^-?\d*\.?\d*$/.test(next)) { const n = Number(next); if (Number.isFinite(n)) set('rate', n) } }, hint: isMac ? t('rateHintMac') : t('rateHintWin') }),
           e(SettingInput, { label: t('engine'), value: value.engine || '', disabled, onChange: next => set('engine', next), hint: t('engineHint') }),
           e(Options, { label: t('longTextBehavior'), value: value.longTextMode || 'message', disabled, onChange: next => set('longTextMode', next), hint: t('longTextBehaviorHint'), options: [{ value: 'message', label: t('longTextMessageOption') }, { value: 'heading', label: t('longTextHeadingOption') }] }),
@@ -383,7 +386,6 @@ window.__ModuleLoader__.load({
           e(DisclosureRow, { icon: null, title: t('optionalEvents'), open: eventsOpen, expandable: true, onToggle: () => setEventsOpen(!eventsOpen), expandOnRowClick: true }, e('div', { style: { paddingLeft: '22px' } },
             e(Toggle, { label: t('turnEnd'), value: value.announceTurnEnd === true, disabled, onChange: next => set('announceTurnEnd', next), hint: t('turnEndHint') }),
             e(Toggle, { label: t('turnEndSummary'), value: value.speakTurnEndSummary === true, disabled: disabled || value.announceTurnEnd !== true, onChange: next => set('speakTurnEndSummary', next), hint: t('turnEndSummaryHint') }),
-            e(SettingInput, { label: t('voice'), value: value.voice || '', disabled, onChange: next => set('voice', next), hint: t('voiceHint') }),
             e(Toggle, { label: t('commandDone'), value: value.announceCommandDone === true, disabled, onChange: next => set('announceCommandDone', next), hint: t('commandDoneHint') }),
             e(Toggle, { label: t('goalChange'), value: value.announceGoalChange === true, disabled, onChange: next => set('announceGoalChange', next), hint: t('goalChangeHint') }),
             e(Toggle, { label: t('toolErrors'), value: value.announceToolErrors === true, disabled, onChange: next => set('announceToolErrors', next), hint: t('toolErrorsHint') }),

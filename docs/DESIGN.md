@@ -77,13 +77,20 @@ Non-goals (for now):
                  Xiaoxiao")                      * no volume flag (follows
               * fallback:  any zh voice (e.g.      the system output)
                  "Microsoft Huihui")
+              * -Voice pins a full name; pwsh 7
+                 is used only for that (OneCore
+                 voices are invisible to 5.1)
 ```
 
 ### 3.1 Engine — `engine/speak.ps1` (+ `engine/speak.sh` on macOS)
 
 The only file a new adapter needs. Two input modes: `-Text "..."` inline, or
 `-File C:\path\msg.txt` (UTF-8). Also `-Volume`, `-Rate`, `-MaxChars`,
-`-LongTextMessage` (see §5). On macOS the plugin auto-picks `speak.sh` (the
+`-LongTextMessage`, and `-Voice` (a voice full name, see §5). The host keeps
+`powershell.exe` (5.1) for every utterance and switches to pwsh 7 only when
+`voice` is configured — OneCore voices are only enumerable there — after a probe
+shows that pwsh can load `System.Speech`; otherwise it stays on 5.1. On macOS
+the plugin auto-picks `speak.sh` (the
 `say` command; default voice follows the system — the Siri voices "声音 1-4"
 are not exposed to `say`, use `-v` to force a name; no volume flag).
 
@@ -139,7 +146,10 @@ no "reply finished" hook, so the plugin observes the session event stream:
   immediately (intermediate messages spoken too).
 - **Optional event announcements** (1.6.0, all off by default): `turn/end`,
   `command/done`, `goal/change`, `tool/result` (on error), and `todo/write` each
-  have an independent toggle and announce a fixed phrase on fire (see §5).
+  have an independent toggle and announce a fixed phrase on fire (see §5). With
+  `speakTurnEndSummary` the `turn/end` phrase gains a one-line summary of the
+  final reply (skipped after the throttled reply was just spoken, still appended
+  in `queueAllMessages` mode).
 - **Settings form** (1.6.0, reworked in 1.8.2 for DSH 0.1.7): the plugin exports a
   static `Config` schema (`module.exports.Config`, every field `.volatile()`), and
   the settings service projects it into the settings UI. The entry's **Loader id
@@ -339,8 +349,10 @@ config:
   maxChars: 300                # macOS default 0 = unlimited
   volume: 50                   # Windows only
   rate: 0                      # rate: Win SAPI scale -10..10 (0=normal) / mac wpm (175)
+  voice: ''                    # Windows only; SAPI full name ('' = engine default)
   # —— optional event announcements (off by default) ——
   announceTurnEnd: false     # turn/end
+  speakTurnEndSummary: false # turn/end + one-line summary of the final reply
   announceCommandDone: false # command/done
   announceGoalChange: false  # goal/change
   announceToolErrors: false  # tool/result with error or isError block
