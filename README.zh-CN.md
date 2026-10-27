@@ -62,8 +62,10 @@ harness 事件（DSH 会话事件 / Claude Code Stop hook / 任意方式）
 ### Windows
 
 - Windows 10 或 11，任意较新的 PowerShell。
-- 引擎使用 **Windows 默认 SAPI 嗓音**。换嗓音在「控制面板 → 语音」（或 设置 →
-  时间和语言 → 语音）里改；插件不会覆盖系统设置。
+- 引擎使用 **Windows 默认 SAPI 嗓音**，插件从不自己挑。换嗓音步骤：
+  **控制面板 → 语音识别 → 文本到语音转换 → 语音** → 选一个（如 `Microsoft Xiaoxiao`）→ 确定。
+  引擎读的就是这里。
+  注意「设置 → 时间和语言 → 语音」是另一套（OneCore）存储，改了**不影响**插件。
 - 想听自然语音：Windows 11（21H2–23H2）已内置语音包；**Windows 11 24H2/25H2** 与
   **Windows 10** 需先装
   [NaturalVoiceSAPIAdapter](https://github.com/gexgd0419/NaturalVoiceSAPIAdapter)，

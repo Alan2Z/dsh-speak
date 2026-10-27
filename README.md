@@ -71,8 +71,11 @@ text and speaks it, fully decoupled from any harness. Full design:
 Windows:
 
 - Windows 10 or 11, PowerShell (any recent version).
-- The engine speaks with the **default SAPI voice**. Change it in *Control Panel →
-  Speech* (or *Settings → Time & Language → Speech*); the plugin does not override it.
+- The engine speaks with the **default SAPI voice**; the plugin never picks one.
+  To change it: **Control Panel → Speech Recognition → Text to Speech → Voice** →
+  pick a voice (e.g. `Microsoft Xiaoxiao`) → OK. That is the voice the engine reads.
+  *Settings → Time & Language → Speech* is a different (OneCore) store and does **not**
+  affect the plugin.
 - For a natural voice: Windows 11 (21H2–23H2) ships the packs; on **Windows 11
   24H2/25H2** and **Windows 10** install
   [NaturalVoiceSAPIAdapter](https://github.com/gexgd0419/NaturalVoiceSAPIAdapter),
