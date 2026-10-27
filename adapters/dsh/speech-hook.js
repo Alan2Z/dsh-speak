@@ -66,58 +66,12 @@ function resolveEngine(override) {
 }
 
 /**
- * Windows: PowerShell 7 (pwsh.exe) is needed only for OneCore voices.
- * 5.1 (powershell.exe) enumerates the classic Desktop voices only; pwsh 7's
- * System.Speech also sees OneCore voices (Yaoyao, Kangkang, Huihui …), which is
- * what an explicit `voice` may name. Every default utterance therefore keeps
- * 1.8.2's powershell.exe, and only a configured voice switches the interpreter —
- * and only after a probe proves that pwsh can load System.Speech, because a pwsh
- * that exists yet cannot speak would otherwise silence every announcement.
- * Resolution order: 1. Program Files\PowerShell\7 (official MSI location)
- *                   2. profile-local @dsh-ops runtime (desktop bundles)
- *                   3. pwsh.exe on PATH (System32\WindowsPowerShell has only 5.1)
+ * Windows: the engine keeps using Windows PowerShell 5.1 (`powershell.exe`) and
+ * the system default SAPI voice. There is no per-plugin voice: choosing a voice
+ * is an OS-level decision (Control Panel → Speech, or Settings → Time & Language
+ * → Speech), so the plugin never overrides it.
  */
-let pwshResolved = false
-let pwshPath = null
-function findWindowsPwsh() {
-  if (pwshResolved) return pwshPath
-  pwshResolved = true
-  const candidates = [
-    'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
-    path.join(__dirname, '..', '..', '..', '@dsh-ops', 'pwsh-win32-x64', 'bin', 'pwsh.exe'),
-  ]
-  for (const cand of candidates) {
-    if (fs.existsSync(cand)) { pwshPath = cand; return pwshPath }
-  }
-  // PATH 上的 pwsh.exe（spawn 不解析扩展名，需全名）
-  try {
-    const probed = require('child_process').spawnSync('pwsh.exe', ['-NoProfile', '-Command', 'exit 0'], { encoding: 'utf8', timeout: 10000, windowsHide: true })
-    if (probed.status === 0) pwshPath = 'pwsh.exe'
-  } catch (e) { /* probe failed */ }
-  return pwshPath
-}
 
-let speechProbe = null
-/** Whether this pwsh can actually load System.Speech (cached: one probe per process). */
-function pwshCanSpeak(exe) {
-  if (speechProbe !== null) return speechProbe
-  try {
-    const probe = require('child_process').spawnSync(exe, ['-NoProfile', '-Command', 'Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() | Out-Null; exit 0'], { encoding: 'utf8', timeout: 15000, windowsHide: true })
-    speechProbe = probe.status === 0
-  } catch (e) { speechProbe = false }
-  return speechProbe
-}
-
-/**
- * The Windows engine process for one utterance: powershell.exe (1.8.2 behavior)
- * unless a voice is configured, in which case pwsh 7 is used when it can speak.
- */
-function windowsSpeechEngine(voice) {
-  if (!voice) return { exe: 'powershell.exe', canUseVoice: true }
-  const pwsh = findWindowsPwsh()
-  if (pwsh && pwshCanSpeak(pwsh)) return { exe: pwsh, canUseVoice: true }
-  return { exe: 'powershell.exe', canUseVoice: false }
-}
 
 // Platform-aware defaults: macOS `say` has no per-utterance ceiling, so
 // `maxChars` defaults to 0 (unlimited) there; Windows keeps the safe 300.
@@ -211,7 +165,6 @@ const SCHEMA_DEFAULTS = {
   maxChars: DEFAULT_MAX_CHARS,
   volume: 50,
   rate: 0,
-  voice: '',
   announceTurnEnd: false,
   speakTurnEndSummary: false,
   announceCommandDone: false,
@@ -275,7 +228,6 @@ function resolveConfig(value) {
     rate: process.platform === 'darwin'
       ? configNumber('rate', value.rate, 0, 0, Number.MAX_SAFE_INTEGER)
       : configNumber('rate', value.rate, 0, -10, 10),
-    voice: typeof value.voice === 'string' ? value.voice : '',
     announceTurnEnd: value.announceTurnEnd === true,
     speakTurnEndSummary: value.speakTurnEndSummary === true,
     announceCommandDone: value.announceCommandDone === true,
@@ -359,7 +311,6 @@ function buildConfig() {
       maxChars: z.natural().default(DEFAULT_MAX_CHARS).volatile(),
       volume: z.natural().default(50).volatile(),
       rate: z.number().default(0).volatile(),
-      voice: z.string().default('').volatile(),
       announceTurnEnd: z.boolean().default(false).volatile(),
       speakTurnEndSummary: z.boolean().default(false).volatile(),
       announceCommandDone: z.boolean().default(false).volatile(),
@@ -484,16 +435,10 @@ module.exports = {
       } else {
         // Windows 语速 = SAPI 刻度（-10 到 10，0 = 正常；负值变慢），直接透传，
         // 不要把 0/负值替换成 1（否则无法回到正常语速/减慢）。
-        // 默认仍用 1.8.2 的 powershell.exe；只有配了 voice 才换 pwsh 7（才能枚举
-        // OneCore 自然嗓），并且先探测它能否加载 System.Speech，不行就退回 5.1——
-        // 此时指定嗓音可能不存在，引擎会按自己的策略退回默认中文嗓。
+        // 不传任何嗓音参数：引擎用系统默认 SAPI 嗓音，换嗓音请在 Windows 设置里改。
         const winArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', cfg.engine, '-File', tmp, '-Volume', String(cfg.volume), '-Rate', String(cfg.rate), '-MaxChars', String(cfg.maxChars), '-LongTextMode', cfg.longTextMode, '-LongTextMessage', cfg.longTextMessage, '-CleanMarkdownFormatting', cfg.cleanMarkdownFormatting ? '1' : '0', '-ReadInlineCode', cfg.readInlineCode ? '1' : '0', '-CodeBlocks', cfg.codeBlocks, '-CodeBlockMaxChars', String(cfg.codeBlockMaxChars), '-CodeBlockReplacementText', cfg.codeBlockReplacementText, '-FullRead', fullRead ? '1' : '0']
-        const voice = (cfg.voice || '').trim()
-        if (voice) winArgs.push('-Voice', voice)
-        const engine = windowsSpeechEngine(voice)
-        child = spawn(engine.exe, winArgs, { windowsHide: true, stdio: 'ignore' })
-        log('engine spawn:', engine.exe, 'voice:', voice || '(engine default)')
-        if (!engine.canUseVoice) log('pwsh 7 不可用或无法加载 System.Speech，已回退 powershell.exe；指定嗓音若不存在将退回默认中文嗓')
+        child = spawn('powershell.exe', winArgs, { windowsHide: true, stdio: 'ignore' })
+        log('engine spawn: powershell.exe')
       }
       const token = ++speechToken
       activeSpeech = { process: child, tmp, token, item, gapMs: item.gapMs || 0 }

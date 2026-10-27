@@ -30,8 +30,9 @@ Goals:
 - One-command install for DSH users (engine + plugin + registration).
 - Engine callable from any harness via a trivial command line.
 - Best-effort speech: never throws, never blocks a harness, never breaks a session.
-- Natural-sounding voices: Windows 11 built-in natural voice packs, or
-  NaturalVoiceSAPIAdapter on Windows 10; graceful fallback to stock voices.
+- **Follow the system voice**: the engine never picks or overrides a voice. Windows
+  uses the default SAPI voice (natural packs on Windows 11, NaturalVoiceSAPIAdapter
+  on Windows 10); macOS uses the system reading voice (`say`, Siri voices included).
 
 Non-goals (for now):
 
@@ -67,32 +68,22 @@ Non-goals (for now):
             +--------------------+------------------------------------------+
                      |                                   |
                      v                                   v
-            Windows SAPI5 (System.Speech) —   macOS say (system voice):
-              voices:                           * default follows the system
-              * preferred: a natural voice —      voice (may be a Siri voice;
-                 Windows 11 built-in pack, or      not listed by `say -v '?'`,
-                 one registered by                 not selectable by name)
-                 NaturalVoiceSAPIAdapter on      * or -v forces a classic voice
-                 Windows 10 (e.g. "Microsoft      (Eddy / Tingting / Flo ...)
-                 Xiaoxiao")                      * no volume flag (follows
-              * fallback:  any zh voice (e.g.      the system output)
-                 "Microsoft Huihui")
-              * -Voice pins a full name; pwsh 7
-                 is used only for that (OneCore
-                 voices are invisible to 5.1)
+            Windows SAPI5 (System.Speech)    macOS say (system voice):
+              * the system default voice        * the system reading voice
+                (Control Panel → Speech)          (Siri voices included)
+              * natural voices come from        * no -v: the engine never
+                Windows 11 packs or the           overrides the OS setting
+                NaturalVoiceSAPIAdapter         * no volume flag (follows
+                (Windows 10)                      the system output)
 ```
 
 ### 3.1 Engine — `engine/speak.ps1` (+ `engine/speak.sh` on macOS)
 
 The only file a new adapter needs. Two input modes: `-Text "..."` inline, or
 `-File C:\path\msg.txt` (UTF-8). Also `-Volume`, `-Rate`, `-MaxChars`,
-`-LongTextMessage`, and `-Voice` (a voice full name, see §5). The host keeps
-`powershell.exe` (5.1) for every utterance and switches to pwsh 7 only when
-`voice` is configured — OneCore voices are only enumerable there — after a probe
-shows that pwsh can load `System.Speech`; otherwise it stays on 5.1. On macOS
-the plugin auto-picks `speak.sh` (the
-`say` command; default voice follows the system — the Siri voices "声音 1-4"
-are not exposed to `say`, use `-v` to force a name; no volume flag).
+`-LongTextMessage` (see §5). There is no voice parameter: both engines speak with
+whatever voice the OS is set to (Windows: the default SAPI voice; macOS: the system
+reading voice, Siri included). The host always spawns `powershell.exe` on Windows.
 
 Processing pipeline (in order):
 
@@ -109,7 +100,7 @@ Processing pipeline (in order):
    (that fallback used to speak only the first line, which sounded like the
    narration was cut off).
 6. **Speak** — `System.Speech.Synthesis.SpeechSynthesizer`, volume/rate applied,
-   best zh natural voice selected, then `Speak()`.
+   the system default voice used as-is, then `Speak()`.
 
 Engine contract for adapters:
 
@@ -349,7 +340,6 @@ config:
   maxChars: 300                # macOS default 0 = unlimited
   volume: 50                   # Windows only
   rate: 0                      # rate: Win SAPI scale -10..10 (0=normal) / mac wpm (175)
-  voice: ''                    # Windows only; SAPI full name ('' = engine default)
   # —— optional event announcements (off by default) ——
   announceTurnEnd: false     # turn/end
   speakTurnEndSummary: false # turn/end + one-line summary of the final reply
@@ -376,7 +366,7 @@ Full configuration guide: the README's Configuration section.
 | 6.2 | Text longer than the adapter's per-`Speak` ceiling (~375–470 chars) | **silent** — the whole utterance is dropped, not truncated | length guard at 300 chars (engine step 5) |
 | 6.3 | Nested `Start-Process powershell` inside a DSH-sandboxed process | silent failure, no exception | keep the DSH chain synchronous at the adapter boundary (spawn once from the plugin; `speech-summary.ps1` calls `speak.ps1` synchronously) |
 | 6.4 | Plugin name with a raw Windows path in `cordis.patch.yml` | plugin fails to load | `file:///C:/...` URL form |
-| 6.5 | Matching adapter voices by name only | falls back to robotic stock voice | match `Name + Description` against `Natural\|Online` |
+| 6.5 | Plugin overriding the OS voice | users hear a voice they did not choose | the engine never selects a voice — it uses the system default |
 | 6.6 | Reading/writing speech text as ANSI | mojibake or empty speech | always UTF-8 (`[System.IO.File]::ReadAllText(..., UTF8)`) |
 | 6.7 | A repo `.sh` checked out as CRLF by `core.autocrlf=true`; `npm pack` bundles the **working-tree** file | the published `speak.sh` dies in bash on macOS (`command not found`, `syntax error near {`), silent failure | `.gitattributes` pins `*.sh text eol=lf` (check `file engine/speak.sh` for CRLF before publishing) |
 | 6.8 | Log path hard-coded as `/tmp` | on macOS `os.tmpdir()` is `/var/folders/.../T`, the log is not at `/tmp` | look for the log at `os.tmpdir()` (= `$TMPDIR`) |

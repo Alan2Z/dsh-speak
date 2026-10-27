@@ -83,16 +83,6 @@ function findAll(node, type, found = []) {
 }
 /** First element whose `type` matches. */
 function findOne(node, type) { return findAll(node, type)[0] }
-/** Collect the rendered field labels (`<div class="dsh-speak-field-label">`) in order. */
-function fieldLabels(node, out = []) {
-  if (!node || typeof node !== 'object') return out
-  if (Array.isArray(node)) { node.forEach(child => fieldLabels(child, out)); return out }
-  if (node.props) {
-    if (node.props.className === 'dsh-speak-field-label' && typeof node.props.children === 'string') out.push(node.props.children)
-    fieldLabels(node.props.children, out)
-  }
-  return out
-}
 /**
  * Expand the element tree the way React would: a function `type` is a
  * component (the plugin's own Field/Toggle/SettingInput wrappers and the
@@ -111,7 +101,7 @@ function expand(node) {
 // Client service stubs
 // ---------------------------------------------------------------------------
 /** @param served settings namespaces the Host serves (the page binds the first match). */
-function makeHarness(served = ['dsh-speak'], ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)') {
+function makeHarness(served = ['dsh-speak']) {
   const registrations = []
   const settingsWrites = []
   const controlRequests = []
@@ -204,7 +194,7 @@ function makeHarness(served = ['dsh-speak'], ua = 'Mozilla/5.0 (Windows NT 10.0;
       querySelector: () => null,
     },
     location: { protocol: 'http:', host: 'localhost:3080' },
-    navigator: { userAgent: ua },
+    navigator: { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
     WebSocket: function WebSocketStub() { this.close = () => {}; sockets.push(this) },
     fetch: (url, init) => {
       controlRequests.push({ url, body: JSON.parse(init.body) })
@@ -291,8 +281,8 @@ console.log('Settings → dsh-speak settings page registered (settings.section) 
 // The page follows the Host: an upgraded profile whose row still carries the
 // pre-1.8.2 entry id binds that namespace instead, and a deployment that serves
 // neither shows no page at all.
-function pageFor(served, ua) {
-  const probe = makeHarness(served, ua)
+function pageFor(served) {
+  const probe = makeHarness(served)
   probe.sandbox.loaded.factory(probe.sandbox.require).apply(probe.ctx)
   return probe
 }
@@ -362,21 +352,6 @@ const numericInput = findOne(settingsTree, 'Input')
 assert.ok(numericInput, 'numeric settings render a text input')
 assert.strictEqual(typeof numericInput.props.onChange, 'function', 'inputs accept change handling')
 console.log('Settings page renders and writes through configForms ✓')
-
-// The voice field is Windows-only and belongs to the audio block, not to the
-// optional-events disclosure (it is irrelevant on macOS, where `say` follows the
-// system voice).
-const VOICE_LABEL = '嗓音（Windows）:'
-const winLabels = fieldLabels(settingsTree)
-assert.ok(winLabels.includes(VOICE_LABEL), `Windows renders the voice field: ${JSON.stringify(winLabels)}`)
-const eventsRow = findOne(settingsTree, 'DisclosureRow')
-assert.ok(eventsRow && !fieldLabels(eventsRow).includes(VOICE_LABEL),
-  'the voice field must not sit inside the optional-events disclosure')
-const macPage = pageFor(['dsh-speak'], 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)')
-const macSettings = macPage.registrations.find(entry => entry.options && entry.options.name === 'settings.section')
-const macLabels = fieldLabels(render(macSettings.component, { close() {} }))
-assert.ok(!macLabels.includes(VOICE_LABEL), `macOS hides the Windows-only voice field: ${JSON.stringify(macLabels)}`)
-console.log('Voice field is Windows-only and sits with the audio settings ✓')
 
 // Top of the settings page: a localized README link plus a collapsed
 // prerequisites block, so a fresh install knows what the engine needs before

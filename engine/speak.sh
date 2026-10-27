@@ -9,7 +9,6 @@ export LC_ALL="${LC_ALL:-en_US.UTF-8}"
 
 TEXT=""
 FILE=""
-VOICE=""
 RATE=175
 MAX_CHARS=0
 LONG_MSG="本次播报内容较长，请自行阅读。"
@@ -22,15 +21,14 @@ CODE_BLOCK_REPLACEMENT="You can see the code in our history."
 FULL_READ=0
 
 usage() {
-  echo "usage: speak.sh [-t text | -f file] [-v voice] [-r wpm] [-m maxchars] [-l longmsg] [-M message|heading] [-C 0|1] [-I 0|1] [-B all|smart|replace] [-K codechars] [-R replacement] [-F]" >&2
+  echo "usage: speak.sh [-t text | -f file] [-r wpm] [-m maxchars] [-l longmsg] [-M message|heading] [-C 0|1] [-I 0|1] [-B all|smart|replace] [-K codechars] [-R replacement] [-F]" >&2
   exit 1
 }
 
-while getopts "t:f:v:r:m:l:M:C:I:B:K:R:Fh" opt; do
+while getopts "t:f:r:m:l:M:C:I:B:K:R:Fh" opt; do
   case "$opt" in
     t) TEXT="$OPTARG" ;;
     f) FILE="$OPTARG" ;;
-    v) VOICE="$OPTARG" ;;
     r) RATE="$OPTARG" ;;
     m) MAX_CHARS="$OPTARG" ;;
     l) LONG_MSG="$OPTARG" ;;
@@ -131,5 +129,5 @@ TEXT=$(printf '%s' "$TEXT" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 if [ "$FULL_READ" != "1" ] && [ "$MAX_CHARS" -gt 0 ] && [ "${#TEXT}" -gt "$MAX_CHARS" ]; then TEXT="$LONG_MSG"; fi
 [ -n "$TEXT" ] || exit 0
 
-if [ -n "$VOICE" ]; then say -v "$VOICE" -r "$RATE" "$TEXT"; else say -r "$RATE" "$TEXT"; fi
+say -r "$RATE" "$TEXT"
 exit 0

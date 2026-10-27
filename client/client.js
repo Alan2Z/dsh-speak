@@ -47,18 +47,13 @@ window.__ModuleLoader__.load({
       prerequisitesBody: [
         'Windows',
         '· Windows 10 或 11，任意较新的 PowerShell。',
-        '· 自然语音：',
-        '  · Windows 11（21H2–23H2）：系统已内置自然语音包，无需额外安装——在「设置 → 辅助功能 → 讲述人」或「设置 → 时间和语言 → 语音」里启用/切换即可。',
-        '  · Windows 11 24H2/25H2：自然语音已改为 MSIX 应用包，System.Speech 可能枚举不到（找不到自然语音、回退到机械音）——与 Windows 10 相同，需安装 NaturalVoiceSAPIAdapter 桥接：https://github.com/gexgd0419/NaturalVoiceSAPIAdapter',
-        '  · Windows 10：需要安装 NaturalVoiceSAPIAdapter，并用它的 VoiceDownloader 手动下载需要的中文（或其他语言）自然语音包。',
-        '· 没有自然语音时，引擎回退到系统自带语音（如 Huihui）。',
+        '· 播报使用 Windows 的**默认 SAPI 嗓音**——换嗓音请在「控制面板 → 语音」或「设置 → 时间和语言 → 语音」里改，插件不会覆盖系统设置。',
+        '· 想听自然语音：Windows 11（21H2–23H2）已内置自然语音包；24H2/25H2 与 Windows 10 需先安装 NaturalVoiceSAPIAdapter（https://github.com/gexgd0419/NaturalVoiceSAPIAdapter）并下载语音包，再把该嗓音设为系统默认。',
+        '· 系统默认是机械音，听到的就是机械音。',
         '',
         'macOS',
         '· macOS（Apple Silicon / Intel 均可），系统自带 say 命令，无需安装任何软件。',
-        '',
-        'DSH 版本',
-        '· 已在 DSH 0.1.7-rc.2 上验证；1.8.2 依赖 0.1.7 的设置模型，DSH ≤ 0.1.6 请用 1.8.1。',
-        '· 宿主要求声明在 package.json 的 engines.dsh（>=0.1.7-rc.2），插件市场的卡片与「适配当前 DSH」筛选读的就是它。',
+        '· 跟随系统嗓音：「系统设置 → 辅助功能 → 朗读内容 → 系统嗓音」里切换（可选 Siri 嗓音；macOS 26 需点旁边的 ⓘ 才能看到完整列表）。',
         '',
         '安装、全部选项与排障见上方「使用说明」。',
       ].join('\n'),
@@ -94,8 +89,6 @@ window.__ModuleLoader__.load({
       maxCharsHint: 'macOS 上 0 = 不限；Windows 保留安全默认值。',
       volume: '音量',
       volumeHint: '仅 Windows（0-100）；macOS 音量跟随系统。',
-      voice: '嗓音（Windows）',
-      voiceHint: 'SAPI 嗓音全名，如 Microsoft Yaoyao；留空用引擎默认。需 pwsh 7 才能看到 OneCore 嗓音。',
       rate: '语速',
       rateHintWin: 'Windows SAPI 语速（-10 到 10，0 = 正常；推荐 0，稍快 1-3）。',
       rateHintMac: 'words-per-minute（wpm），数值越大语速越快：默认 175，稍快 200。',
@@ -141,18 +134,13 @@ window.__ModuleLoader__.load({
       prerequisitesBody: [
         'Windows',
         '· Windows 10 or 11, PowerShell (any recent version).',
-        '· Natural voices:',
-        '  · Windows 11 (21H2–23H2): the voice packs are built in — no extra install. Enable/switch them in Settings → Accessibility → Narrator or Settings → Time & Language → Speech.',
-        '  · Windows 11 24H2/25H2: natural voices moved to MSIX app packages that System.Speech may not enumerate (it falls back to a robotic stock voice). As on Windows 10, install NaturalVoiceSAPIAdapter to bridge them: https://github.com/gexgd0419/NaturalVoiceSAPIAdapter',
-        '  · Windows 10: install NaturalVoiceSAPIAdapter and use its VoiceDownloader to download the natural voice pack(s) you want (Chinese or any other language).',
-        '· Without natural voices the engine falls back to a stock voice (e.g. Huihui).',
+        '· Announcements use the **default SAPI voice** of Windows — change it in Control Panel → Speech (or Settings → Time & Language → Speech); the plugin never overrides the system setting.',
+        '· For a natural voice: Windows 11 (21H2–23H2) ships the packs; on 24H2/25H2 and Windows 10 install NaturalVoiceSAPIAdapter (https://github.com/gexgd0419/NaturalVoiceSAPIAdapter), download a pack, and set that voice as the system default.',
+        '· If the system default is a robotic voice, that is what you will hear.',
         '',
         'macOS',
         '· macOS (Apple Silicon or Intel), built-in say command — no extra software.',
-        '',
-        'DSH web app',
-        '· Tested against DSH 0.1.7-rc.2; 1.8.2 needs the 0.1.7 settings model, so use 1.8.1 on DSH ≤ 0.1.6.',
-        '· The host floor lives in package.json engines.dsh (>=0.1.7-rc.2) — that is what the catalog card and its "compatible with current DSH" filter read.',
+        '· Follows the system voice: System Settings → Accessibility → Spoken Content → System Voice (Siri voices included; on macOS 26 click the ⓘ icon for the full list).',
         '',
         'Install steps, the full option reference and troubleshooting are in the "Usage guide" link above.',
       ].join('\n'),
@@ -188,8 +176,6 @@ window.__ModuleLoader__.load({
       maxCharsHint: '0 is unlimited on macOS; Windows keeps its safe default.',
       volume: 'Volume',
       volumeHint: 'Windows only (0-100); macOS volume follows the system.',
-      voice: 'Voice (Windows)',
-      voiceHint: 'Exact SAPI voice name, e.g. Microsoft Yaoyao; empty = engine default. OneCore voices need pwsh 7.',
       rate: 'Speech Rate',
       rateHintWin: 'Windows SAPI rate scale (-10 to 10, 0 = normal; try 1-3 for faster).',
       rateHintMac: 'words-per-minute (wpm) — higher = faster: default 175, 200 is a bit faster.',
@@ -424,9 +410,6 @@ window.__ModuleLoader__.load({
           e(Toggle, { label: t('cleanMarkdown'), value: clean, disabled, onChange: next => set('cleanMarkdownFormatting', next), hint: t('cleanMarkdownHint') }), e(MarkdownCleaning, { value, clean, disabled, set }),
           e(SettingInput, { label: t('maxChars'), value: value.maxChars == null ? 0 : value.maxChars, numeric: true, disabled, onChange: next => { if (/^\d+$/.test(next)) set('maxChars', Number(next)) }, hint: t('maxCharsHint') }),
           e(SettingInput, { label: t('volume'), value: value.volume == null ? 50 : value.volume, numeric: true, disabled, onChange: next => { if (/^\d+$/.test(next)) set('volume', Number(next)) }, hint: t('volumeHint') }),
-          // voice 是 Windows 专属（macOS 的 say 不支持指定嗓音），跟音量/语速放在
-          // 音频区块；macOS 上不显示，免得出现一个改了没反应的输入框。
-          isMac ? null : e(SettingInput, { label: t('voice'), value: value.voice || '', disabled, onChange: next => set('voice', next), hint: t('voiceHint') }),
           e(SettingInput, { label: t('rate'), value: value.rate == null ? 0 : value.rate, numeric: true, disabled, onChange: next => { if (/^-?\d*\.?\d*$/.test(next)) { const n = Number(next); if (Number.isFinite(n)) set('rate', n) } }, hint: isMac ? t('rateHintMac') : t('rateHintWin') }),
           e(SettingInput, { label: t('engine'), value: value.engine || '', disabled, onChange: next => set('engine', next), hint: t('engineHint') }),
           e(Options, { label: t('longTextBehavior'), value: value.longTextMode || 'message', disabled, onChange: next => set('longTextMode', next), hint: t('longTextBehaviorHint'), options: [{ value: 'message', label: t('longTextMessageOption') }, { value: 'heading', label: t('longTextHeadingOption') }] }),
@@ -447,7 +430,7 @@ window.__ModuleLoader__.load({
       }
       ctx.effect(() => {
         const style = document.createElement('style'); style.dataset.plugin = 'dsh-speak'
-        style.textContent = '.dsh-speak-message-action{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:5px;border:0;border-radius:28px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;font:inherit;font-size:14px;line-height:1}.dsh-speak-message-action:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.dsh-speak-message-action[data-speaking]{color:var(--dsw-alias-label-primary)}.dsh-speak-message-action:disabled{cursor:default;opacity:.4}.dsh-speak-field{display:flex;flex-direction:column;gap:8px;margin:0 0 20px}.dsh-speak-field-label{font-weight:600;color:var(--dsw-alias-label-primary)}.dsh-speak-inline-field{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dsh-speak-inline-field>.dsh-speak-field-label{flex:none}.dsh-speak-field-hint{margin:0;color:var(--dsw-alias-label-tertiary)}.dsh-speak-field+.dsh-speak-field{margin-top:20px}.dsh-speak-option-row{display:inline-flex;align-items:center;gap:8px;width:max-content;max-width:100%}.dsh-speak-input-row{display:flex;max-width:100%}.dsh-speak-input-row>span{max-width:100%}.dsh-speak-guide-link-row{margin:0 0 12px}.dsh-speak-guide-link{color:var(--dsw-alias-label-primary);text-decoration:underline;text-underline-offset:2px;font-weight:600}.dsh-speak-star-ask{margin-left:12px;color:var(--dsw-alias-label-primary)}.dsh-speak-guide-body{margin:0;white-space:pre-wrap;line-height:1.6;max-height:360px;overflow:auto;color:var(--dsw-alias-label-primary)}'
+        style.textContent = '.dsh-speak-message-action{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:5px;border:0;border-radius:28px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;font:inherit;font-size:14px;line-height:1}.dsh-speak-message-action:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.dsh-speak-message-action[data-speaking]{color:var(--dsw-alias-label-primary)}.dsh-speak-message-action:disabled{cursor:default;opacity:.4}.dsh-speak-field{display:flex;flex-direction:column;gap:8px;margin:0 0 20px}.dsh-speak-field-label{font-weight:600;color:var(--dsw-alias-label-primary)}.dsh-speak-inline-field{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dsh-speak-inline-field>.dsh-speak-field-label{flex:none}.dsh-speak-field-hint{margin:0;color:var(--dsw-alias-label-tertiary)}.dsh-speak-field+.dsh-speak-field{margin-top:20px}.dsh-speak-option-row{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;width:max-content;max-width:100%}.dsh-speak-input-row{display:flex;max-width:100%}.dsh-speak-input-row>span{max-width:100%}.dsh-speak-guide-link-row{margin:0 0 12px}.dsh-speak-guide-link{color:var(--dsw-alias-label-primary);text-decoration:underline;text-underline-offset:2px;font-weight:600}.dsh-speak-star-ask{margin-left:12px;color:var(--dsw-alias-label-primary)}.dsh-speak-guide-body{margin:0;white-space:pre-wrap;line-height:1.6;max-height:360px;overflow:auto;color:var(--dsw-alias-label-primary)}'
         document.head.appendChild(style); return () => style.remove()
       }, 'dsh-speak message action styles')
       ctx.slots.inject('conversation.chat.assistant-actions', () => ctx.slots.register({ name: 'conversation.chat.assistant-actions', id: 'speak', order: 5, label: 'Speak', locale: NS }, SpeakAction))

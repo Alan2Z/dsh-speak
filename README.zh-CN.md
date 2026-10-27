@@ -10,11 +10,10 @@
 
 让 Agent 在长任务完成时**开口告诉你**——不用再盯着屏幕等。
 
-dsh-speak 通过系统语音合成把 Agent 的最终回复朗读出来——Windows 上优先使用自然
-语音（Windows 11 内置，或 Windows 10 上经
-[NaturalVoiceSAPIAdapter] 注册，如晓晓），macOS 上使用系统自带的 `say`
-（可跟随 Siri 自然音色）；没有时优雅回退到系统自带中文语音。本项目为
-[DeepSeek Harness](https://github.com/deepseek-ai/dsh) 而生，但结构上
+dsh-speak 通过系统语音合成把 Agent 的最终回复朗读出来，用的是**操作系统当前的嗓音**——
+Windows 上即默认 SAPI 嗓音（Windows 11 自带自然语音包，或 Windows 10 上经
+[NaturalVoiceSAPIAdapter] 注册），macOS 上即系统朗读嗓音（`say`，可含 Siri 音色）。
+本项目为 [DeepSeek Harness](https://github.com/deepseek-ai/dsh) 而生，但结构上
 任何 harness 都能接入。
 
 ## 特性
@@ -37,9 +36,9 @@ dsh-speak 通过系统语音合成把 Agent 的最终回复朗读出来——Win
 - **Bundle 自动注册**（1.3.0）：把包声明进 `dsh.profile.bundles`，插件通过包内
   自带的 `cordis.patch.yml` 自动注册，无需手动写 patch 条目。
 - **尽力而为**：绝不抛错、绝不阻塞 harness、绝不破坏会话。
-- **自然语音**：Windows 优先使用自然语音——Windows 11 内置语音包，或 Windows 10
-  上经 NaturalVoiceSAPIAdapter 注册的语音（如晓晓）；macOS 使用系统朗读声音
-  （新版可跟随 Siri 自然音色）。均回退到任意已安装语音。
+- **跟随系统嗓音**：引擎不挑、也不覆盖嗓音，直接用**系统默认**——Windows 是默认
+  SAPI 嗓音（控制面板「语音」或 设置 → 时间和语言 → 语音 里换），macOS 是系统朗读
+  嗓音（系统设置 → 辅助功能 → 朗读内容 → 系统嗓音，可含 Siri）。换嗓音请改系统设置。
 - **健壮的文本清洗**：去掉会让语音合成静默失败的 markdown/URL/emoji，
   并守卫适配器单次朗读的字数上限。
 - **引擎可移植**：任意进程一行即可朗读：
@@ -63,17 +62,13 @@ harness 事件（DSH 会话事件 / Claude Code Stop hook / 任意方式）
 ### Windows
 
 - Windows 10 或 11，任意较新的 PowerShell。
-- 自然语音：
-  - **Windows 11（21H2–23H2）**：系统已内置自然语音包，无需额外安装——在
-    *设置 → 辅助功能 → 讲述人* 或 *设置 → 时间和语言 → 语音* 中启用/切换即可。
-  - **Windows 11 24H2/25H2**：自然语音已改为 MSIX 应用包，`System.Speech` 可能
-    枚举不到（`SpeechSynthesizer` 找不到自然语音、回退到机械音）——与 Windows 10
-    相同，需安装 [NaturalVoiceSAPIAdapter](https://github.com/gexgd0419/NaturalVoiceSAPIAdapter)
-    桥接。
-  - **Windows 10**：需要安装
-    [NaturalVoiceSAPIAdapter](https://github.com/gexgd0419/NaturalVoiceSAPIAdapter)，
-    并用它的 VoiceDownloader 手动下载你需要的中文或其他语言的自然语音包。
-- 没有自然语音时，引擎回退到系统自带语音（如 Huihui）。
+- 引擎使用 **Windows 默认 SAPI 嗓音**。换嗓音在「控制面板 → 语音」（或 设置 →
+  时间和语言 → 语音）里改；插件不会覆盖系统设置。
+- 想听自然语音：Windows 11（21H2–23H2）已内置语音包；**Windows 11 24H2/25H2** 与
+  **Windows 10** 需先装
+  [NaturalVoiceSAPIAdapter](https://github.com/gexgd0419/NaturalVoiceSAPIAdapter)，
+  用它的 VoiceDownloader 下载语音包，再把该嗓音设为系统默认。系统默认是机械音，
+  听到的就是机械音。
 
 ### macOS 要求
 
@@ -82,7 +77,7 @@ harness 事件（DSH 会话事件 / Claude Code Stop hook / 任意方式）
 
 ### DSH 版本
 
-- 已在 **DSH 0.1.7-rc.2** 上验证。0.1.1 之后有两轮 host/客户端 API 变更，本插件均已适配：
+- 已在 **DSH 0.2.1-rc.4** 上验证。0.1.1 之后有两轮 host/客户端 API 变更，本插件均已适配：
   - **0.1.7 把 settings provider API 换成了 Config 投影**：settings 服务改为读取每个
     已激活 Loader 条目自己导出的 `Config` schema，把其中的 *volatile* 字段投影成设置
     界面（宿主侧 `ctx.settings.describe()`，浏览器侧 `ctx.configForms`）。1.6.0–1.8.x
@@ -93,10 +88,12 @@ harness 事件（DSH 会话事件 / Claude Code Stop hook / 任意方式）
   - **0.1.2** 起 Session snapshot 不再携带会话视图（Conversation target）数据——
     🔊 按钮改为通过 Chat 目标的 hook `useChat` 取被点击消息的文本；同一版本还删除了
     `@deepseek-ai/dsh-settings` 的 `installSettingsSection` / `settingsNamespace`。
+  - **0.2.x**（已实测到 0.2.1-rc.4）没有插件 API 破坏性变更，插件仍只依赖上面这些接口
+    和 `engines.dsh`。
 - 宿主要求声明在 dsh-market 实际读取的位置：`package.json` 的 `engines.dsh`
   （`>=0.1.7-rc.2`）。市场卡片与「适配当前 DSH」筛选读的正是这个字段，因此只有在
   某个宿主版本上实测通过后，这个下限才会移动。
-- 1.8.2 依赖 0.1.7 引入的设置模型：在更老的宿主上浏览器半侧会一直等待
+- dsh-speak 1.8.2+ 依赖 0.1.7 引入的设置模型：在更老的宿主上浏览器半侧会一直等待
   `configForms` 服务。DSH ≤ 0.1.6 请用 1.8.1。
 
 ## 安装与快速开始
@@ -202,9 +199,10 @@ npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
 
 #### 音色（重要，有两个坑）
 
-- 默认跟随**系统朗读声音**（系统设置 → 辅助功能 → 朗读内容 → 系统朗读声音）。
-  **macOS 26** 上该选择框旁有个 **ⓘ 圆圈图标**，点开才是完整音色列表——普通
-  下拉框里**没有 Siri 自然音色**；可在 ⓘ 列表里选"普通话 Siri 声音1（男声）"等。
+- 引擎**跟随系统朗读声音**（系统设置 → 辅助功能 → 朗读内容 → 系统朗读声音），
+  从不覆盖它。**macOS 26** 上该选择框旁有个 **ⓘ 圆圈图标**，点开才是完整音色
+  列表——普通下拉框里**没有 Siri 自然音色**；可在 ⓘ 列表里选"普通话 Siri
+  声音1（男声）"等。
 - **Siri 声音**（设置 → Siri → 声音）与系统朗读声音是**两个独立设置**；Siri
   音色不暴露给 `say -v '?'`，无法按名选择，只能作为系统默认生效。
 - ⚠️ **坑 1（实测复现）**：打开"朗读内容 / Siri 声音"设置面板（**哪怕不改任何
@@ -212,7 +210,6 @@ npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
   就回到 ⓘ 入口重新选择。
 - ⚠️ **坑 2**：日志在 `$TMPDIR/dsh-speech-hook.log`（`os.tmpdir()`，**不是**
   `/tmp`）。
-- 想强制指定音色用 `-v Eddy|Flo|Tingting`（`say -v '?'` 列出可用音色）。
 - `say` 没有音量参数——音量跟随系统输出音量。
 
 #### 单独测试引擎（不装 DSH 也行）
@@ -221,7 +218,7 @@ npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
 curl -sfL -o ~/speak.sh "https://cdn.jsdelivr.net/gh/Alan2Z/dsh-speak@main/engine/speak.sh"
 chmod +x ~/speak.sh
 ~/speak.sh -t "你好，Mac 版语音播报测试"
-~/speak.sh -t "测试" -v Eddy -r 200              # 指定音色 + 语速
+~/speak.sh -t "测试" -r 200                       # 语速更快，仍用系统声音
 ```
 
 ### Claude Code
@@ -310,7 +307,6 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
     maxChars: 300           # 引擎单次朗读字数上限（macOS 默认 0 = 不限）
     volume: 50              # 仅 Windows
     rate: 0                 # 0 = 引擎默认（Windows SAPI 刻度 / macOS wpm）
-    voice: ''               # 仅 Windows；嗓音全名（如 Microsoft Yaoyao）；留空走引擎默认
     # —— 可选事件播报（1.6.0，默认全关）——
     announceTurnEnd: false     # 回合结束（"第 N 轮对话完成"）
     speakTurnEndSummary: false # 完成播报带一句话摘要
@@ -365,7 +361,6 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
 | `maxChars` | 平台相关 | 引擎单次朗读上限。**macOS 默认 0（`say` 无上限）；Windows 默认 300**（SAPI 超过约 375-470 字会静默失败） |
 | `volume` | `50` | 仅 Windows（0-100）；macOS 音量跟随系统 |
 | `rate` | `0` | 语速：Windows SAPI 刻度（-10 到 10，0 = 正常，推荐 0 / 稍快 1-3）；macOS words-per-minute（默认 175，稍快 200） |
-| `voice` | `''` | 仅 Windows：嗓音全名（如 `Microsoft Yaoyao`），以 `-Voice` 传给引擎。留空走引擎默认策略（自然中文嗓 → 任意中文嗓）。OneCore 自然嗓只有 PowerShell 7 枚举得到，所以**只有配了 `voice`** 时宿主才会切到验证过的 pwsh 7（Program Files → 内置运行时 → PATH）；其余情况、以及该 pwsh 加载不了 `System.Speech` 时，仍用 `powershell.exe`（与 1.8.2 一致） |
 | `announceTurnEnd` | `false` | 回合结束时播报"第 N 轮对话完成/中断/异常结束"（`turn/end`） |
 | `speakTurnEndSummary` | `false` | 完成播报带一句话摘要："第 N 轮对话完成：<摘要>"（剥 markdown、最多 60 字，硬截断时补省略号；节流路径刚念过正文时跳过；`queueAllMessages` 模式下照常追加） |
 | `announceCommandDone` | `false` | 命令执行完成/失败时播报（`command/done`） |
@@ -394,7 +389,7 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
 
 想调行为又不想 fork，而且改完**不会被 `npm update` 覆盖**：
 
-1. **把引擎复制出来改**（推荐——默认参数都在这：音量、语速、字数上限、超长提示语、音色逻辑）：
+1. **把引擎复制出来改**（推荐——默认参数都在这：音量、语速、字数上限、超长提示语）：
 
    ```powershell
    # Windows
@@ -432,13 +427,13 @@ speak.ps1 -Text "…" -Volume 50 -Rate 1 -MaxChars 300 -LongTextMessage "本次�
 
 | 现象 | 原因 | 解决 |
 | ---- | ---- | ---- |
-| 完全没有声音、无报错 | 未启用/安装自然语音 | Win11：在 设置 → 讲述人/语音 中启用自然语音；Win10：安装 NaturalVoiceSAPIAdapter 并下载语音包。直接测 `speak.ps1` |
+| 完全没有声音、无报错 | 没有可用的 SAPI 嗓音，或系统默认嗓音缺失 | 打开「控制面板 → 语音」选一个已安装的嗓音；Win10 / Win11 24H2+ 需安装 NaturalVoiceSAPIAdapter 并下载语音包。直接测 `speak.ps1` |
 | 长回复从不播报 | 适配器单次 `Speak` 有字数上限 | 已默认在 300 字处守卫——必要时调低 `-MaxChars` |
 | 念到第二行就停/像是被切断 | `longTextMode: heading` 下，文本超过 `maxChars` 且整段没有 markdown 标题时，旧版引擎只念第一个非空行（1.8.0 之前） | 1.8.0 已修（改念"有头有尾的开头"）；想换策略可用 `message` 模式或调高 `maxChars` |
 | 听到 `工具调用出错：Error: cannot read …` | "是否中文"的详情判据只检查"含有汉字"，英文报错里夹着中文目录名就能骗过它（1.8.0 引入的回归） | 1.8.0 已修——详情需满足"汉字数量多于拉丁字母数量" |
 | 含大量 emoji 的文本静默 | SAPI 遇到 emoji 会静默失败 | 引擎已自动剥离 |
 | 插件加载失败 | 插件名用了 Windows 原始路径 | 改用 `file:///C:/…` URL 形式（安装脚本会自动处理） |
-| 升级到 1.8.2 后设置页不出现 | profile patch 那行写着 `disabled: true`，或条目 id 既不是 `dsh-speak` 也不是旧 id `speech-hook` | 去掉 `disabled`，并把 `id` 改成两者之一 |
+| 升级到 1.8.x 后设置页不出现 | profile patch 那行写着 `disabled: true`，或条目 id 既不是 `dsh-speak` 也不是旧 id `speech-hook` | 去掉 `disabled`，并把 `id` 改成两者之一 |
 | 设置页能开、但每次改动都被弹回 | DSH < 0.1.7（`configForms` 已取代 `settingsScope`） | 升级 DSH，或继续用 dsh-speak 1.8.1 |
 | DSH 0.1.7+ 上每次改动都被弹回，且插件日志出现 `已有实例在运行` | 条目被注册了**两次**（例如包既在 `dsh.profile.bundles` 里、又手写了一行 `insert:`）：id 不再唯一，config-editor 会拒绝每次写入（`settings/rejected: Configuration for "dsh-speak" is overridden by a home patch or command-line overlay`）；语音照常工作，所以特别难查 | 只保留一种注册方式（见「方式 A」），然后重启 |
 | 改完立刻生效，但重启后变回旧值 | `config:` 块嵌在 profile patch 的 `insert:` 行里——DSH 的 config-editor 只会就地改写**顶层**行，嵌套写入会被静默回滚（仍然回 `ok: true`） | 按「DSH 插件配置」把 `config` 放到顶层行；`python scripts/settings-ui-check.py` 会断言写入真的落盘 |

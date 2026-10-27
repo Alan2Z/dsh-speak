@@ -1,8 +1,11 @@
 ﻿# speak.ps1 — Harness-agnostic speech engine (Windows SAPI5 + NaturalVoiceSAPIAdapter)
 # ====================================================================================
 # Reads text (inline or from a UTF-8 file), cleans it for speech synthesis, and reads
-# it aloud through Windows SAPI5, preferring natural voices registered by
-# NaturalVoiceSAPIAdapter (https://github.com/gexgd0419/NaturalVoiceSAPIAdapter).
+# it aloud through Windows SAPI5 using the **system default voice** — voice choice is
+# an OS setting (Control Panel → Speech / Settings → Time & Language → Speech), not a
+# script parameter. On Windows 10 natural voices come from NaturalVoiceSAPIAdapter
+# (https://github.com/gexgd0419/NaturalVoiceSAPIAdapter); pick one there and make it
+# the system default.
 #
 # This script knows NOTHING about any harness (DSH, Claude Code, ...). Any process
 # can call it:
@@ -19,8 +22,6 @@
 #   * NaturalVoiceSAPIAdapter has a per-Speak character ceiling (~375-470 chars);
 #     beyond that it silently speaks nothing. Text longer than $MaxChars is replaced
 #     with $LongTextMessage instead.
-#   * Adapter-registered voices often have plain names ("Microsoft Xiaoxiao") that do
-#     not contain the word "Natural", so matching checks Name + Description.
 # ====================================================================================
 
 param(
@@ -47,10 +48,7 @@ param(
     [string]$FullRead = '0',
     # 只把「将要朗读的文本」按 UTF-8 写到 stdout、完全不出声（调试清洗与长文
     # 守卫用；正常调用无需传，插件不会传）
-    [string]$DryRun = '0',
-    # 指定音色（嗓音全名，见 GetInstalledVoices().VoiceInfo.Name）。留空则沿用
-    # 内置策略：优先 Natural/Online 的中文嗓，否则任意中文嗓。
-    [string]$Voice = ''
+    [string]$DryRun = '0'
 )
 
 $cleanMarkdown = $CleanMarkdownFormatting -in @('1', 'true', 'yes', 'on')
@@ -176,29 +174,6 @@ if ($dryRunMode) {
 Add-Type -AssemblyName System.Speech
 $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
 $synth.Volume = $Volume
-
-# 注意：PowerShell 变量名大小写不敏感，内部变量绝不能与参数 $Voice 仅差大小写
-# （$voice 会自赋值覆盖参数 $Voice —— 正是脚本头部注释记过的那个坑）。
-# 指定音色优先：$PickedVoice 命中即用它，否则沿用「自然中文嗓 → 任意中文嗓」策略。
-$installed = $synth.GetInstalledVoices()
-$pickedVoice = $null
-$wantedName = ''
-if ($Voice) { $wantedName = [string]$Voice }
-$wantedName = $wantedName.Trim()
-if ($wantedName) {
-    $pickedVoice = $installed | Where-Object { $_.VoiceInfo.Name -eq $wantedName } | Select-Object -First 1
-}
-if (-not $pickedVoice) {
-    $pickedVoice = $installed | Where-Object {
-        $_.VoiceInfo.Culture.Name -like 'zh*' -and
-        ($_.VoiceInfo.Name + ' ' + $_.VoiceInfo.Description) -match 'Natural|Online'
-    } | Select-Object -First 1
-}
-if (-not $pickedVoice) {
-    $pickedVoice = $installed | Where-Object { $_.VoiceInfo.Culture.Name -like 'zh*' } | Select-Object -First 1
-}
-if ($pickedVoice) { $synth.SelectVoice([string]$pickedVoice.VoiceInfo.Name) }
-
 $synth.Rate = $Rate
 
 # ---------- 完整朗读（FullRead，手动重播） ----------

@@ -26,8 +26,9 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
 - DSH 用户一键安装（引擎 + 插件 + 注册）。
 - 引擎可通过一行命令行从任意 harness 调用。
 - 尽力而为的播报：绝不抛错、绝不阻塞 harness、绝不破坏会话。
-- 自然语音：Windows 11 内置自然语音包，或 Windows 10 上经 NaturalVoiceSAPIAdapter
-  注册；优雅回退到系统自带语音。
+- **跟随系统嗓音**：引擎不挑、也不覆盖嗓音。Windows 用默认 SAPI 嗓音（Windows 11
+  内置自然语音包，或 Windows 10 上经 NaturalVoiceSAPIAdapter 注册）；macOS 用系统
+  朗读嗓音（`say`，可含 Siri 音色）。
 
 非目标（当前阶段）：
 
@@ -63,25 +64,20 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
                      |                                   |
                      v                                   v
             Windows SAPI5 (System.Speech)      macOS say（系统音色）：
-              * 优先：自然语音 — Windows 11 内置   * 默认跟随系统声音（可含
-                语音包，或 Windows 10 上经           Siri 音色，`say -v '?'`
-                NaturalVoiceSAPIAdapter 注册         不列出，无法按名选择）
-                （如 "Microsoft Xiaoxiao"）         * 或 -v 指定经典音色
-              * 回退：任意 zh 语音（如 "Microsoft     （Eddy/Tingting/Flo…）
-                Huihui"）                           * 无音量参数（随系统）
-              * -Voice 可指定全名；只有配了它才
-                用 pwsh 7（5.1 看不到 OneCore 嗓）
+              * 用系统默认嗓音                     * 用系统朗读嗓音
+                （控制面板 → 语音）                  （可含 Siri 音色）
+              * 自然语音来自 Windows 11 语音包     * 不传 -v：引擎不覆盖
+                或 NaturalVoiceSAPIAdapter           系统设置
+                （Windows 10）                     * 无音量参数（随系统）
 ```
 
 ### 3.1 引擎 — `engine/speak.ps1`（macOS 上为 `engine/speak.sh`）
 
 新适配器唯一需要打交道的文件。两种输入模式：`-Text "..."` 直接传入，或
 `-File C:\path\msg.txt`（UTF-8）。另有 `-Volume`、`-Rate`、`-MaxChars`、
-`-LongTextMessage`、`-Voice`（嗓音全名，见 §5）。宿主默认一律用
-`powershell.exe`（5.1），**只有配了 `voice`** 才切 pwsh 7（OneCore 嗓音只有它能枚举），
-且先探测该 pwsh 能否加载 `System.Speech`，不行就退回 5.1。在 macOS 上插件会自动改选 `speak.sh`
-（`say` 命令；默认音色跟随系统——Siri 音色"声音 1-4"未暴露给 `say`，
-需用 `-v` 强制指定名字；无音量参数）。
+`-LongTextMessage`（见 §5）。**没有嗓音参数**：两个引擎都用操作系统当前的嗓音
+（Windows 是默认 SAPI 嗓音；macOS 是系统朗读嗓音，可含 Siri）。Windows 上宿主
+始终用 `powershell.exe` 启动引擎。
 
 处理管线（按顺序）：
 
@@ -96,7 +92,7 @@ Agent 工具会跑长任务（构建、测试、迁移、批量修改），而�
    "有头有尾的开头"——取开头 `MaxChars` 窗口并回退到窗口内最后一个句末标点
    （旧实现这里只念第一个非空行，听感上就是"从第二行开始不念了"）。
 6. **朗读** — `System.Speech.Synthesis.SpeechSynthesizer`，应用音量/语速，
-   选择最佳 zh 自然语音，然后 `Speak()`。
+   直接使用系统默认嗓音，然后 `Speak()`。
 
 引擎对适配器的契约：
 
@@ -303,7 +299,6 @@ config:
   maxChars: 300                # macOS 默认 0 = 不限
   volume: 50                   # 仅 Windows
   rate: 0                      # 语速：Win SAPI 刻度 -10~10（0=正常）/ mac wpm（175）
-  voice: ''                    # 仅 Windows；SAPI 嗓音全名（'' = 引擎默认）
   # —— 可选事件播报（默认全关）——
   announceTurnEnd: false     # turn/end
   speakTurnEndSummary: false # turn/end 带上最终回复的一句话摘要
@@ -329,7 +324,7 @@ patch：UI 写入是一组字段操作（`set` / `unset` path op），由 settin
 | 6.2 | 文本超过适配器单次 `Speak` 上限（约 375–470 字） | **静默**——整段被丢弃，而不是截断 | 300 字长度守卫（引擎第 5 步） |
 | 6.3 | 在 DSH 沙箱进程内嵌套 `Start-Process powershell` | 静默失败，无异常 | DSH 链路在适配器边界保持同步（插件只 spawn 一次；`speech-summary.ps1` 同步调用 `speak.ps1`） |
 | 6.4 | `cordis.patch.yml` 里插件名用 Windows 原始路径 | 插件加载失败 | 用 `file:///C:/...` URL 形式 |
-| 6.5 | 只按名字匹配适配器音色 | 回退到机械感的系统语音 | 用 `Name + Description` 匹配 `Natural\|Online` |
+| 6.5 | 插件覆盖系统嗓音 | 用户听到自己没选的嗓音 | 引擎从不选嗓，只用系统默认 |
 | 6.6 | 用 ANSI 读写播报文本 | 乱码或完全无声 | 一律 UTF-8（`[System.IO.File]::ReadAllText(..., UTF8)`） |
 | 6.7 | 仓库内 `.sh` 被 git 按 `core.autocrlf=true` 检出为 CRLF，`npm pack` 打包的是**工作区**文件 | 发布包里的 `speak.sh` 在 macOS 上 bash 语法错误（`command not found`、`syntax error near {`），静默失败 | `.gitattributes` 里 `*.sh text eol=lf` 锁定 LF（发布前 `file engine/speak.sh` 确认无 CRLF） |
 | 6.8 | 日志路径写死 `/tmp` | macOS 上 `os.tmpdir()` 是 `/var/folders/.../T`，`/tmp` 里找不到日志 | 日志路径按 `os.tmpdir()`（= `$TMPDIR`）查找 |

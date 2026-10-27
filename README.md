@@ -10,10 +10,10 @@
 
 Let your agent **tell you** when a long task is done — no more staring at the screen.
 
-dsh-speak reads the final assistant reply aloud through system speech synthesis —
-on Windows using natural voices (Windows 11 built-in, or
-[NaturalVoiceSAPIAdapter] on Windows 10) with graceful fallback to stock voices;
-on macOS using the built-in `say` (can follow a Siri natural voice). It was built
+dsh-speak reads the final assistant reply aloud through system speech synthesis,
+using whatever voice the operating system is set to — on Windows the default SAPI
+voice (natural packs on Windows 11, or [NaturalVoiceSAPIAdapter] on Windows 10);
+on macOS the system reading voice (`say`, Siri voices included). It was built
 for [DeepSeek Harness](https://github.com/deepseek-ai/dsh)
 and is structured so any harness can plug in.
 
@@ -42,10 +42,11 @@ and is structured so any harness can plug in.
   and the plugin registers itself via the bundled `cordis.patch.yml` — no manual
   patch entry needed.
 - **Best-effort**: never throws, never blocks the harness, never breaks a session.
-- **Natural voices**: Windows prefers natural voices — Windows 11 built-in packs,
-  or voices registered via NaturalVoiceSAPIAdapter on Windows 10 (e.g. Xiaoxiao);
-  macOS uses the system reading voice (Siri natural voices on recent macOS). Both
-  fall back to any installed voice.
+- **System voice**: the engine never picks or overrides a voice — it speaks with
+  the **system default** voice. Windows: the SAPI default (Control Panel → Speech,
+  or Settings → Time & Language → Speech), where natural voices come from Windows
+  11 packs or NaturalVoiceSAPIAdapter on Windows 10. macOS: the system reading voice
+  (Siri voices included). Change the voice in the OS settings.
 - **Robust text cleaning**: strips markdown/URLs/emoji that make speech synthesis
   fail silently, and guards the adapter's per-utterance character ceiling.
 - **Portable engine**: any process can speak with one line:
@@ -70,30 +71,24 @@ text and speaks it, fully decoupled from any harness. Full design:
 Windows:
 
 - Windows 10 or 11, PowerShell (any recent version).
-- Natural voices:
-  - **Windows 11 (21H2–23H2)**: natural voice packs are built into the system —
-    no extra installation. Enable/switch them in *Settings → Accessibility →
-    Narrator* or *Settings → Time & Language → Speech*.
-  - **Windows 11 24H2/25H2**: natural voices moved to MSIX app packages, which
-    `System.Speech` may not enumerate (falls back to a robotic stock voice). As
-    on Windows 10, install
-    [NaturalVoiceSAPIAdapter](https://github.com/gexgd0419/NaturalVoiceSAPIAdapter)
-    to bridge them.
-  - **Windows 10**: install
-    [NaturalVoiceSAPIAdapter](https://github.com/gexgd0419/NaturalVoiceSAPIAdapter)
-    and use its VoiceDownloader to download the natural voice pack(s) you want
-    (Chinese or any other language).
-- Without natural voices, the engine falls back to a stock voice (e.g. Huihui).
+- The engine speaks with the **default SAPI voice**. Change it in *Control Panel →
+  Speech* (or *Settings → Time & Language → Speech*); the plugin does not override it.
+- For a natural voice: Windows 11 (21H2–23H2) ships the packs; on **Windows 11
+  24H2/25H2** and **Windows 10** install
+  [NaturalVoiceSAPIAdapter](https://github.com/gexgd0419/NaturalVoiceSAPIAdapter),
+  download a voice pack with its VoiceDownloader, and set that voice as the system
+  default. If the system default is a stock voice (e.g. Huihui), that is what you hear.
 
 macOS:
 
 - macOS (Apple Silicon or Intel), built-in `say` command — **no extra software**.
-- Chinese voices: see the [macOS](#macos) section (incl. the Siri natural-voice
-  picker and its pitfalls).
+- The engine follows the **system voice** (*System Settings → Accessibility →
+  Spoken Content → System Voice*; Siri voices included). See the [macOS](#macos)
+  section for the picker and its pitfalls.
 
 DSH web app:
 
-- Tested against **DSH 0.1.7-rc.2**. Host/client APIs changed twice since 0.1.1,
+- Tested against **DSH 0.2.1-rc.4**. Host/client APIs changed twice since 0.1.1,
   both handled here:
   - **0.1.7 replaced the settings provider API with Config projection**: the
     settings service now reads each active Loader entry's own exported `Config`
@@ -108,11 +103,13 @@ DSH web app:
     (the 🔊 button resolves the clicked message through the Chat target hook
     `useChat`), and deleted `@deepseek-ai/dsh-settings`'s `installSettingsSection`
     / `settingsNamespace` helpers.
+  - **0.2.x** (verified through 0.2.1-rc.4) shipped no plugin-API breakage: the
+    plugin still relies only on the APIs above plus `engines.dsh`.
 - The host floor lives where dsh-market reads it: `engines.dsh` in `package.json`
   (`>=0.1.7-rc.2`). The catalog card and its "compatible with current DSH" filter
   read exactly that field, so the floor moves only after a release has been
   verified against the new host.
-- 1.8.2 requires the settings model introduced in 0.1.7: on an older host the
+- dsh-speak 1.8.2+ requires the settings model introduced in 0.1.7: on an older host the
   browser half would wait forever for the `configForms` service. Use 1.8.1 for
   DSH ≤ 0.1.6.
 
@@ -226,11 +223,11 @@ npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
 
 #### Voices (important — two pitfalls)
 
-- By default the engine follows the **system reading voice** (*Settings →
-  Accessibility → Spoken Content → System Voice*). On **macOS 26** that picker has
-  an **ⓘ circle icon** next to it — click it for the full voice list; the plain
-  dropdown does **not** contain the Siri natural voices. Pick e.g. "普通话 Siri
-  声音1（男声）" there.
+- The engine **follows the system reading voice** (*Settings → Accessibility →
+  Spoken Content → System Voice*); it never overrides it. On **macOS 26** that
+  picker has an **ⓘ circle icon** next to it — click it for the full voice list;
+  the plain dropdown does **not** contain the Siri natural voices. Pick e.g.
+  "普通话 Siri 声音1（男声）" there.
 - **Siri voice** (*Settings → Siri → Voice*) and the system reading voice are
   **two independent settings**; Siri voices are not exposed to `say -v '?'` and
   cannot be selected by name — they only work as the system default.
@@ -240,7 +237,6 @@ npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
   entry.
 - ⚠️ **Pitfall 2**: the log lives at `$TMPDIR/dsh-speech-hook.log`
   (`os.tmpdir()` — **not** `/tmp`).
-- Use `-v Eddy|Flo|Tingting` to force a specific voice (`say -v '?'` lists them).
 - `say` has no volume flag — volume follows the system output volume.
 
 #### Test the engine alone (no DSH needed)
@@ -249,7 +245,7 @@ npm install --prefix "$HOME/.dsh/profiles/web" dsh-speak
 curl -sfL -o ~/speak.sh "https://cdn.jsdelivr.net/gh/Alan2Z/dsh-speak@main/engine/speak.sh"
 chmod +x ~/speak.sh
 ~/speak.sh -t "你好，Mac 版语音播报测试"
-~/speak.sh -t "测试" -v Eddy -r 200              # explicit voice + rate
+~/speak.sh -t "测试" -r 200                       # faster rate, system voice
 ```
 
 ### Claude Code
@@ -342,7 +338,6 @@ document — the settings service persists UI edits into the row it read them fr
     maxChars: 300           # per-utterance ceiling (macOS default 0 = unlimited)
     volume: 50              # Windows only
     rate: 0                 # 0 = engine default (Windows SAPI scale / macOS wpm)
-    voice: ''               # Windows only; SAPI voice full name (e.g. Microsoft Yaoyao); '' = engine default
     # —— optional event announcements (1.6.0, all off by default) ——
     announceTurnEnd: false     # turn/end — "第 N 轮对话完成"
     speakTurnEndSummary: false # completed turns get a one-line reply summary
@@ -402,7 +397,6 @@ document — the settings service persists UI edits into the row it read them fr
 | `maxChars` | platform | per-utterance ceiling. **macOS default 0 (`say` has no ceiling); Windows default 300** (SAPI fails silently beyond ~375-470) |
 | `volume` | `50` | Windows only (0-100); macOS volume follows the system |
 | `rate` | `0` | speech rate: Windows SAPI scale (-10 to 10, 0 = normal; try 1-3 for faster); macOS words-per-minute (default 175, 200 is a bit faster) |
-| `voice` | `''` | Windows only. Exact SAPI voice name (e.g. `Microsoft Yaoyao`), passed to the engine as `-Voice`. Empty = engine default policy (natural zh voice → any zh voice). OneCore voices are only enumerable under PowerShell 7, so **only when `voice` is set** does the hook switch to a pwsh 7 it has verified (Program Files → bundled runtime → PATH); otherwise — and whenever that pwsh cannot load `System.Speech` — it keeps `powershell.exe` (1.8.2 behavior) |
 | `announceTurnEnd` | `false` | announce "第 N 轮对话完成/中断/异常结束" on turn end (`turn/end`) |
 | `speakTurnEndSummary` | `false` | completed turns get a one-line summary of the final reply: "第 N 轮对话完成：<summary>" (markdown stripped, up to 60 chars — a hard cut ends with an ellipsis; skipped when the throttled reply was just spoken, still appended in `queueAllMessages` mode) |
 | `announceCommandDone` | `false` | announce when a command finishes or fails (`command/done`) |
@@ -436,7 +430,7 @@ Full architecture and design rationale: [docs/DESIGN.md](docs/DESIGN.md).
 You can tune behavior without forking, and your changes **survive `npm update`**:
 
 1. **Copy the engine out and edit it** (recommended — this is where defaults live: volume,
-   rate, `MaxChars`, `LongTextMessage`, voice logic):
+   rate, `MaxChars`, `LongTextMessage`):
 
    ```powershell
    # Windows
@@ -476,13 +470,13 @@ You can tune behavior without forking, and your changes **survive `npm update`**
 
 | symptom | cause | fix |
 | ------- | ----- | --- |
-| No sound at all, no error | no natural voice enabled/installed | Win11: enable a natural voice in *Settings → Narrator / Speech*; Win10: install NaturalVoiceSAPIAdapter + a voice pack. Test `speak.ps1` directly |
+| No sound at all, no error | no usable SAPI voice selected, or the default voice is missing | open *Control Panel → Speech* and pick an installed voice; on Windows 10 / 11 24H2+ install NaturalVoiceSAPIAdapter + a voice pack. Test `speak.ps1` directly |
 | Long replies never spoken | adapter per-`Speak` character ceiling | already guarded at 300 chars — lower `-MaxChars` if needed |
 | Narration stops after the first line | with `longTextMode: heading`, text over `maxChars` and no markdown heading made the engine speak only the first non-empty line (pre-1.8.0) | fixed in 1.8.0 (speaks a coherent opening instead); to change the policy use `message` mode or raise `maxChars` |
 | `工具调用出错：Error: cannot read …` spoken | the "is this Chinese?" detail filter only checked for the presence of a CJK character, so a Chinese directory name inside an English error passed it (1.8.0 regression) | fixed in 1.8.0 — the detail now needs more Chinese characters than Latin letters |
 | Emoji-heavy text silent | SAPI fails silently on emoji | already stripped by the engine |
 | Plugin not loading | raw Windows path as plugin name | use the `file:///C:/…` URL form (installer does this) |
-| Settings page missing after upgrade to 1.8.2 | profile patch row `disabled: true`, or the entry id is neither `dsh-speak` nor the legacy `speech-hook` | enable the row and use one of those two ids as its `id` |
+| Settings page missing after upgrading to 1.8.x | profile patch row `disabled: true`, or the entry id is neither `dsh-speak` nor the legacy `speech-hook` | enable the row and use one of those two ids as its `id` |
 | Settings page renders but every change bounces back | DSH < 0.1.7 (the `configForms` service replaced `settingsScope`) | update DSH, or stay on dsh-speak 1.8.1 |
 | Every change bounces back on DSH 0.1.7+, and the plugin log says `已有实例在运行` | the entry is registered **twice** — e.g. the package is in `dsh.profile.bundles` *and* a hand-written `insert:` row exists. The id stops being unique, and the config editor rejects each write (`settings/rejected: Configuration for "dsh-speak" is overridden by a home patch or command-line overlay`); speech keeps working, which is what makes it confusing | keep exactly one registration path (see Option A), then restart |
 | A setting applies immediately but is back to the old value after a restart | the `config:` block sits INSIDE the profile patch's `insert:` row — DSH's config editor rewrites config in place only on a top-level row, and silently rolls the nested write back (it still answers `ok: true`) | split it into the two-row shape from [DSH plugin config](#dsh-plugin-config); `python scripts/settings-ui-check.py` asserts the write lands |
